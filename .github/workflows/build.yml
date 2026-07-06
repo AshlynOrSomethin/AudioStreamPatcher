@@ -16,25 +16,47 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libasound2-dev \
-            libpulse-dev \
-            libgtk-3-dev \
-            libxkbcommon-dev \
-            libpango1.0-dev \
-            libx11-dev \
-            libxcb1-dev \
-            libxcb-shm0-dev \
-            libx11-xcb-dev \
-            libxext-dev \
-            libxrandr-dev \
-            libxcomposite-dev \
-            libxcursor-dev \
-            libxdamage-dev \
-            libxfixes-dev \
-            libxi-dev \
-            nasm
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y \
+              libasound2-dev \
+              libpulse-dev \
+              libgtk-3-dev \
+              libxkbcommon-dev \
+              libpango1.0-dev \
+              libx11-dev \
+              libxcb1-dev \
+              libxcb-shm0-dev \
+              libx11-xcb-dev \
+              libxext-dev \
+              libxrandr-dev \
+              libxcomposite-dev \
+              libxcursor-dev \
+              libxdamage-dev \
+              libxfixes-dev \
+              libxi-dev \
+              nasm
+          elif command -v emerge >/dev/null 2>&1; then
+            sudo emerge --quiet --noreplace \
+              media-libs/alsa-lib \
+              media-sound/pulseaudio \
+              x11-libs/gtk+ \
+              x11-libs/libxkbcommon \
+              x11-libs/pango \
+              x11-libs/libX11 \
+              x11-libs/libxcb \
+              x11-libs/libXext \
+              x11-libs/libXrandr \
+              x11-libs/libXcomposite \
+              x11-libs/libXcursor \
+              x11-libs/libXdamage \
+              x11-libs/libXfixes \
+              x11-libs/libXi \
+              media-video/nasm
+          else
+            echo "Unsupported package manager on runner. Expected apt-get or emerge."
+            exit 1
+          fi
 
       - name: Install cbindgen
         run: |
