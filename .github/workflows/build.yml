@@ -94,8 +94,17 @@ jobs:
             echo "No build dist directory found under zen/obj-*/dist"
             exit 1
           fi
-          tar czf zen-patched.tar.gz -C "$dist_dir" .
-          echo "dist_dir=$dist_dir" >> "$GITHUB_OUTPUT"
+
+          # Create a portable staging directory with symlinks resolved.
+          # Some files in dist/bin (for example dependentlibs.list) are build-tree symlinks.
+          # If we archive raw dist, those links break after extraction and XPCOM fails to load.
+          portable_dir="$RUNNER_TEMP/zen-dist-portable"
+          rm -rf "$portable_dir"
+          mkdir -p "$portable_dir"
+          cp -aL "$dist_dir"/. "$portable_dir"/
+
+          tar czf zen-patched.tar.gz -C "$portable_dir" .
+          echo "dist_dir=$portable_dir" >> "$GITHUB_OUTPUT"
 
       - name: Build distributable packages
         run: |
