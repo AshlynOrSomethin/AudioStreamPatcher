@@ -153,14 +153,14 @@ jobs:
           if [ -z "${DESKTOP_FILE:-}" ]; then
             mkdir -p "$APPDIR/usr/share/applications"
             DESKTOP_FILE="$APPDIR/usr/share/applications/zen-patched.desktop"
-            cat > "$DESKTOP_FILE" <<EOF
-            [Desktop Entry]
-            Type=Application
-            Name=Zen Patched
-            Exec=zen
-            Icon=zen
-            Categories=Network;WebBrowser;
-            EOF
+            printf '%s\n' \
+              '[Desktop Entry]' \
+              'Type=Application' \
+              'Name=Zen Patched' \
+              'Exec=zen' \
+              'Icon=zen' \
+              'Categories=Network;WebBrowser;' \
+              > "$DESKTOP_FILE"
           fi
 
           app_exec=$(awk -F= '/^Exec=/{print $2; exit}' "$DESKTOP_FILE" | sed -E 's/[[:space:]]+%[A-Za-z]//g' | awk '{print $1}' || true)
@@ -191,10 +191,10 @@ jobs:
             ln -sf zen.png "$APPDIR/.DirIcon"
           fi
 
-          cat > "$APPDIR/AppRun" <<EOF
-          #!/bin/sh
-          exec "\$APPDIR/$app_exec" "\$@"
-          EOF
+          printf '%s\n' \
+            '#!/bin/sh' \
+            "exec \"\\$APPDIR/$app_exec\" \"\\$@\"" \
+            > "$APPDIR/AppRun"
           chmod +x "$APPDIR/AppRun"
 
           UPINFO="gh-releases-zsync|$GITHUB_REPOSITORY_OWNER|AudioStreamPatcher|latest|zen-patched-${ARCH}.AppImage.zsync"
@@ -230,9 +230,9 @@ jobs:
             sudo flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           fi
 
-          runtime=$(awk -F': *' '/^[[:space:]]*runtime:[[:space:]]*/ {gsub(/"/, "", $2); print $2; exit}' "$manifest")
-          sdk=$(awk -F': *' '/^[[:space:]]*sdk:[[:space:]]*/ {gsub(/"/, "", $2); print $2; exit}' "$manifest")
-          runtime_version=$(awk -F': *' '/^[[:space:]]*runtime-version:[[:space:]]*/ {gsub(/"/, "", $2); print $2; exit}' "$manifest")
+          runtime=$(awk -F': *' '/^[[:space:]]*runtime:[[:space:]]*/ {v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^["'"'"']|["'"'"']$/, "", v); print v; exit}' "$manifest")
+          sdk=$(awk -F': *' '/^[[:space:]]*sdk:[[:space:]]*/ {v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^["'"'"']|["'"'"']$/, "", v); print v; exit}' "$manifest")
+          runtime_version=$(awk -F': *' '/^[[:space:]]*runtime-version:[[:space:]]*/ {v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^["'"'"']|["'"'"']$/, "", v); print v; exit}' "$manifest")
 
           arch="x86_64"
           echo "Flatpak manifest runtime=${runtime:-<empty>} sdk=${sdk:-<empty>} runtime-version=${runtime_version:-<empty>} arch=$arch"
