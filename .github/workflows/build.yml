@@ -10,7 +10,7 @@ on:
 
 jobs:
   build:
-    runs-on: [self-hosted, linux, x64, gentoo]
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4  # your repo, just contains the patch + scripts
 
