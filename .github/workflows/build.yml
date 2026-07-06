@@ -57,10 +57,12 @@ jobs:
 
       - name: Adjust mozconfig for CI
         run: |
-          cd zen/engine
-          if ! grep -q -- "--without-wasm-sandboxed-libraries" mozconfig; then
-            echo "ac_add_options --without-wasm-sandboxed-libraries" >> mozconfig
-          fi
+          cd zen
+          for cfg in configs/common/mozconfig configs/linux/mozconfig; do
+            if [ -f "$cfg" ] && ! grep -q -- "--without-wasm-sandboxed-libraries" "$cfg"; then
+              echo "ac_add_options --without-wasm-sandboxed-libraries" >> "$cfg"
+            fi
+          done
 
       - name: Build
         run: |
