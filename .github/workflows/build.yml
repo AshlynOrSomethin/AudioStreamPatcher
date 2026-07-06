@@ -12,22 +12,30 @@ jobs:
       - name: Clone Zen
         run: git clone https://github.com/zen-browser/desktop.git --depth 10 zen
 
-      - name: Apply patch
-        run: |
-          cd zen/engine
-          patch -p1 < ../../software-volume.patch
-          git add -A
-          git commit -m "Apply software volume patch"
-
       - name: Install deps and build
         run: |
           cd zen
           npm i
           npm run init
+
+      - name: Apply patch
+        run: |
+          cd zen/engine
+          patch -p1 < ../../.github/workflows/patches/software-volume.patch
+
+      - name: Build
+        run: |
+          cd zen
           npm run build
 
       - name: Package artifact
-        run: tar czf zen-patched.tar.gz -C zen/obj-*/dist <appropriate build output dir>
+        run: |
+          dist_dir=$(find zen -maxdepth 4 -type d -path "*/obj-*/dist" | head -n 1)
+          if [ -z "$dist_dir" ]; then
+            echo "No build dist directory found under zen/obj-*/dist"
+            exit 1
+          fi
+          tar czf zen-patched.tar.gz -C "$dist_dir" .
 
       - uses: actions/upload-artifact@v4
         with:
