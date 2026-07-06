@@ -55,6 +55,13 @@ jobs:
           cd zen/engine
           patch -p1 < ../../.github/workflows/patches/software-volume.patch
 
+      - name: Adjust mozconfig for CI
+        run: |
+          cd zen/engine
+          if ! grep -q -- "--without-wasm-sandboxed-libraries" mozconfig; then
+            echo "ac_add_options --without-wasm-sandboxed-libraries" >> mozconfig
+          fi
+
       - name: Build
         run: |
           cd zen
