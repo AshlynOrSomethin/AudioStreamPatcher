@@ -46,7 +46,12 @@ jobs:
 
       - name: Install cbindgen
         run: |
-          rustup component add rustfmt
+          if command -v rustup >/dev/null 2>&1; then
+            rustup component add rustfmt
+          elif ! command -v rustfmt >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y rustfmt
+          fi
           cargo install cbindgen --version 0.29.1 --locked --force
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
