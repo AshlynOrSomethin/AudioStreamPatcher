@@ -17,105 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4  # your repo, just contains the patch + scripts
 
-      - name: Resolve Zen upstream revision
-        id: zen_ref
-        run: |
-          set -euo pipefail
-          zen_sha=$(git ls-remote https://github.com/zen-browser/desktop.git refs/heads/main | awk '{print $1}')
-          if [ -z "${zen_sha:-}" ]; then
-            echo "Failed to resolve Zen upstream SHA"
-            exit 1
-          fi
-          echo "zen_sha=$zen_sha" >> "$GITHUB_OUTPUT"
-          echo "Using Zen upstream SHA: $zen_sha"
-
-      - name: Resolve patch fingerprint
-        id: patch_ref
-        run: |
-          set -euo pipefail
-          patch_hash=$(sha256sum .github/workflows/patches/software-volume.patch | awk '{print $1}')
-          if [ -z "${patch_hash:-}" ]; then
-            echo "Failed to resolve patch hash"
-            exit 1
-          fi
-          echo "patch_hash=$patch_hash" >> "$GITHUB_OUTPUT"
-
-      - name: Check existing release for Zen commit
-        id: release_lookup
-        uses: actions/github-script@v7
-        env:
-          ZEN_SHA: ${{ steps.zen_ref.outputs.zen_sha }}
-          PATCH_HASH: ${{ steps.patch_ref.outputs.patch_hash }}
-        with:
-          script: |
-            const tag = `zen-${process.env.ZEN_SHA}-${process.env.PATCH_HASH.slice(0, 12)}`;
-            core.setOutput('tag', tag);
-
-            try {
-              const { data } = await github.rest.repos.getReleaseByTag({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                tag,
-              });
-
-              const lines = (data.assets || [])
-                .map((asset) => `${asset.name}|${asset.browser_download_url}`)
-                .join('\n');
-
-              core.setOutput('found', 'true');
-              core.setOutput('assets', lines);
-              core.info(`Found existing release ${tag} with ${data.assets.length} assets.`);
-            } catch (error) {
-              if (error.status === 404) {
-                core.setOutput('found', 'false');
-                core.setOutput('assets', '');
-                core.info(`No existing release found for ${tag}.`);
-              } else {
-                throw error;
-              }
-            }
-
-      - name: Download release assets
-        if: steps.release_lookup.outputs.found == 'true'
-        env:
-          ASSETS: ${{ steps.release_lookup.outputs.assets }}
-        run: |
-          set -euo pipefail
-          mkdir -p release
-
-          if [ -z "${ASSETS:-}" ]; then
-            echo "Release exists but has no assets to download."
-            exit 1
-          fi
-
-          while IFS='|' read -r name url; do
-            [ -n "$name" ] || continue
-            echo "Downloading $name"
-            curl -fL --retry 3 -o "release/$name" "$url"
-          done <<< "$ASSETS"
-
-      - name: Reuse existing release
-        if: steps.release_lookup.outputs.found == 'true'
-        run: |
-          echo "Reusing release ${{ steps.release_lookup.outputs.tag }}"
-          ls -lah release
-
-      - name: Restore cached packaged build
-        id: release_cache
-        if: steps.release_lookup.outputs.found != 'true'
-        uses: actions/cache/restore@v4
-        with:
-          path: release
-          key: zen-release-${{ steps.zen_ref.outputs.zen_sha }}-${{ steps.patch_ref.outputs.patch_hash }}
-
-      - name: Reuse cached build output
-        if: steps.release_lookup.outputs.found != 'true' && steps.release_cache.outputs.cache-hit == 'true'
-        run: |
-          echo "Reusing cached release artifacts for Zen commit ${{ steps.zen_ref.outputs.zen_sha }}"
-          ls -lah release
-
       - name: Install system dependencies
-        if: steps.release_lookup.outputs.found != 'true' && steps.release_cache.outputs.cache-hit != 'true'
         run: |
           if ! command -v apt-get >/dev/null 2>&1; then
             echo "This workflow requires Ubuntu (apt-get not found)."
@@ -146,7 +48,6 @@ jobs:
             llvm-dev
 
       - name: Install cbindgen
-        if: steps.release_lookup.outputs.found != 'true' && steps.release_cache.outputs.cache-hit != 'true'
         run: |
           if command -v rustup >/dev/null 2>&1; then
             rustup component add rustfmt
@@ -158,28 +59,20 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Clone Zen
-        if: steps.release_lookup.outputs.found != 'true' && steps.release_cache.outputs.cache-hit != 'true'
-        run: |
-          git clone https://github.com/zen-browser/desktop.git --depth 10 zen
-          cd zen
-          git fetch --depth 1 origin "${{ steps.zen_ref.outputs.zen_sha }}"
-          git checkout --detach "${{ steps.zen_ref.outputs.zen_sha }}"
+        run: git clone https://github.com/zen-browser/desktop.git --depth 10 zen
 
       - name: Install deps and build
-        if: steps.release_lookup.outputs.found != 'true' && steps.release_cache.outputs.cache-hit != 'true'
         run: |
           cd zen
           npm i
           npm run init
 
       - name: Apply patch
-        if: steps.release_lookup.outputs.found != 'true' && steps.release_cache.outputs.cache-hit != 'true'
         run: |
           cd zen/engine
           patch -p1 < ../../.github/workflows/patches/software-volume.patch
 
       - name: Adjust mozconfig for CI
-        if: steps.release_lookup.outputs.found != 'true' && steps.release_cache.outputs.cache-hit != 'true'
         run: |
           cd zen
           for cfg in configs/common/mozconfig configs/linux/mozconfig; do
@@ -189,14 +82,12 @@ jobs:
           done
 
       - name: Build
-        if: steps.release_lookup.outputs.found != 'true' && steps.release_cache.outputs.cache-hit != 'true'
         run: |
           cd zen
           npm run build
 
       - name: Package artifact
         id: package
-        if: steps.release_lookup.outputs.found != 'true' && steps.release_cache.outputs.cache-hit != 'true'
         run: |
           dist_dir=$(find zen -maxdepth 4 -type d -path "*/obj-*/dist" | head -n 1)
           if [ -z "$dist_dir" ]; then
@@ -207,7 +98,6 @@ jobs:
           echo "dist_dir=$dist_dir" >> "$GITHUB_OUTPUT"
 
       - name: Build distributable packages
-        if: steps.release_lookup.outputs.found != 'true' && steps.release_cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           VERSION="$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}"
@@ -230,92 +120,97 @@ jobs:
 
       - name: Build AppImage (best effort)
         continue-on-error: true
-        if: steps.release_lookup.outputs.found != 'true' && steps.release_cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           VERSION="$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}"
-          DIST_DIR="${{ steps.package.outputs.dist_dir }}"
+          ARCH="x86_64"
+          APPDIR="build/AppDir"
+          INPUT_TAR="release/zen-patched-linux-x86_64.tar.zst"
 
-          BIN_PATH=""
-
-          # Prefer the executable declared in any desktop file shipped in dist.
-          desktop_file=$(find "$DIST_DIR" -maxdepth 3 -type f -name "*.desktop" | head -n 1 || true)
-          if [ -n "${desktop_file:-}" ]; then
-            desktop_exec=$(awk -F= '/^Exec=/{print $2; exit}' "$desktop_file" | sed -E 's/[[:space:]]+%[A-Za-z]//g' | awk '{print $1}' || true)
-            if [ -n "${desktop_exec:-}" ]; then
-              if [ -x "$DIST_DIR/$desktop_exec" ]; then
-                BIN_PATH="$DIST_DIR/$desktop_exec"
-              elif [ -x "$DIST_DIR/$(basename "$desktop_exec")" ]; then
-                BIN_PATH="$DIST_DIR/$(basename "$desktop_exec")"
-              fi
-            fi
+          if [ ! -f "$INPUT_TAR" ]; then
+            echo "Missing AppImage input tarball: $INPUT_TAR"
+            exit 0
           fi
 
-          # Fallback to common browser binary names.
-          if [ -z "$BIN_PATH" ]; then
+          sudo apt-get update
+          sudo apt-get install -y desktop-file-utils appstream
+          if ! sudo apt-get install -y libfuse2; then
+            sudo apt-get install -y libfuse2t64
+          fi
+
+          rm -rf "$APPDIR" appimage-root appimage-input
+          mkdir -p "$APPDIR" appimage-root appimage-input release
+
+          tar --zstd -xf "$INPUT_TAR" -C appimage-input
+
+          if [ -d appimage-input/zen ]; then
+            cp -a appimage-input/zen/. "$APPDIR"/
+          else
+            cp -a appimage-input/. "$APPDIR"/
+          fi
+
+          DESKTOP_FILE="$(find "$APPDIR" -maxdepth 3 -type f -name "*.desktop" | head -n 1 || true)"
+          if [ -z "${DESKTOP_FILE:-}" ]; then
+            mkdir -p "$APPDIR/usr/share/applications"
+            DESKTOP_FILE="$APPDIR/usr/share/applications/zen-patched.desktop"
+            cat > "$DESKTOP_FILE" <<EOF
+            [Desktop Entry]
+            Type=Application
+            Name=Zen Patched
+            Exec=zen
+            Icon=zen
+            Categories=Network;WebBrowser;
+            EOF
+          fi
+
+          app_exec=$(awk -F= '/^Exec=/{print $2; exit}' "$DESKTOP_FILE" | sed -E 's/[[:space:]]+%[A-Za-z]//g' | awk '{print $1}' || true)
+          if [ -z "${app_exec:-}" ]; then
             for candidate in zen zen-bin firefox firefox-bin browser; do
-              if [ -x "$DIST_DIR/$candidate" ]; then
-                BIN_PATH="$DIST_DIR/$candidate"
+              if [ -x "$APPDIR/$candidate" ]; then
+                app_exec="$candidate"
                 break
               fi
             done
           fi
 
-          # Last resort: pick an executable from top-level dist.
-          if [ -z "$BIN_PATH" ]; then
-            BIN_PATH=$(find "$DIST_DIR" -maxdepth 1 -type f -executable \
-              ! -name "*.so" ! -name "*.xpt" ! -name "*.chk" ! -name "updater" \
-              | head -n 1 || true)
+          if [ -z "${app_exec:-}" ]; then
+            app_exec=$(find "$APPDIR" -maxdepth 1 -type f -executable | head -n 1 | xargs -r basename || true)
           fi
 
-          if [ -z "${BIN_PATH:-}" ]; then
-            echo "No executable found for AppImage packaging in $DIST_DIR."
-            echo "Top-level dist files:"
-            ls -lah "$DIST_DIR" || true
-            echo "Desktop files and Exec entries:"
-            find "$DIST_DIR" -maxdepth 3 -type f -name "*.desktop" -print0 | while IFS= read -r -d '' f; do
-              echo "--- $f"
-              grep -E '^Exec=' "$f" || true
-            done
-            echo "Skipping AppImage build."
+          if [ -z "${app_exec:-}" ]; then
+            echo "AppImage: could not find executable in $APPDIR"
+            ls -lah "$APPDIR" || true
             exit 0
           fi
 
-          BIN_NAME="$(basename "$BIN_PATH")"
-          echo "Using AppImage binary: $BIN_NAME"
-
-          rm -rf AppDir
-          mkdir -p AppDir/usr/bin AppDir/usr/lib/zen-patched AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
-          cp -a "$DIST_DIR"/. AppDir/usr/lib/zen-patched/
-          ln -sf "../lib/zen-patched/$BIN_NAME" AppDir/usr/bin/zen-patched
-
-          cat > AppDir/AppRun <<EOF
-          #!/bin/sh
-          exec "\$APPDIR/usr/lib/zen-patched/$BIN_NAME" "\$@"
-          EOF
-          chmod +x AppDir/AppRun
-
-          cat > AppDir/usr/share/applications/zen-patched.desktop <<EOF
-          [Desktop Entry]
-          Type=Application
-          Name=Zen Patched
-          Exec=zen-patched
-          Icon=zen-patched
-          Categories=Network;WebBrowser;
-          EOF
-
-          icon_path=$(find "$DIST_DIR" -type f \( -name "*256*.png" -o -name "*.png" \) | head -n 1 || true)
+          mkdir -p "$APPDIR/usr/share/icons/hicolor/128x128/apps"
+          icon_path=$(find "$APPDIR" -type f \( -name "*128*.png" -o -name "*256*.png" -o -name "*.png" \) | head -n 1 || true)
           if [ -n "${icon_path:-}" ]; then
-            cp "$icon_path" AppDir/usr/share/icons/hicolor/256x256/apps/zen-patched.png
+            cp "$icon_path" "$APPDIR/usr/share/icons/hicolor/128x128/apps/zen.png"
+            cp "$icon_path" "$APPDIR/zen.png"
+            ln -sf zen.png "$APPDIR/.DirIcon"
           fi
 
-          curl -L -o appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
-          chmod +x appimagetool
-          ARCH=x86_64 ./appimagetool AppDir "release/zen-patched-${VERSION}-x86_64.AppImage"
+          cat > "$APPDIR/AppRun" <<EOF
+          #!/bin/sh
+          exec "\$APPDIR/$app_exec" "\$@"
+          EOF
+          chmod +x "$APPDIR/AppRun"
+
+          UPINFO="gh-releases-zsync|$GITHUB_REPOSITORY_OWNER|AudioStreamPatcher|latest|zen-patched-${ARCH}.AppImage.zsync"
+          wget "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O appimagetool-x86_64.AppImage
+          wget "https://github.com/VHSgunzo/uruntime/releases/latest/download/uruntime-appimage-squashfs-lite-$ARCH" -O "uruntime-appimage-squashfs-lite-$ARCH"
+          chmod +x appimagetool-x86_64.AppImage "uruntime-appimage-squashfs-lite-$ARCH"
+          sed -i 's|URUNTIME_MOUNT=[0-9]|URUNTIME_MOUNT=0|' "uruntime-appimage-squashfs-lite-$ARCH" || true
+
+          ./appimagetool-x86_64.AppImage -u "$UPINFO" "$APPDIR" "zen-patched-${ARCH}.AppImage" --runtime-file "./uruntime-appimage-squashfs-lite-$ARCH"
+          mv -f zen-patched-${ARCH}.AppImage release/
+          if [ -f "zen-patched-${ARCH}.AppImage.zsync" ]; then
+            mv -f "zen-patched-${ARCH}.AppImage.zsync" release/
+          fi
 
       - name: Build Flatpak bundle (best effort)
         continue-on-error: true
-        if: steps.release_lookup.outputs.found != 'true' && steps.release_cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           if [ -f zen/build/flatpak/app.zen_browser.zen.yml ]; then
@@ -360,24 +255,18 @@ jobs:
           mkdir -p release
           sudo flatpak build-bundle flatpak-repo release/zen-patched.flatpak app.zen_browser.zen
 
-      - name: Save packaged build cache
-        if: steps.release_lookup.outputs.found != 'true' && steps.release_cache.outputs.cache-hit != 'true' && success()
-        uses: actions/cache/save@v4
-        with:
-          path: release
-          key: zen-release-${{ steps.zen_ref.outputs.zen_sha }}-${{ steps.patch_ref.outputs.patch_hash }}
-
       - uses: actions/upload-artifact@v4
         with:
           name: zen-patched
           path: "release/*"
 
       - name: Publish GitHub release
-        if: success() && steps.release_lookup.outputs.found != 'true'
+        if: success()
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release_lookup.outputs.tag }}
-          name: Zen ${{ steps.zen_ref.outputs.zen_sha }} (patch ${{ steps.patch_ref.outputs.patch_hash }})
+          tag_name: build-${{ github.run_number }}
+          name: Build ${{ github.run_number }}
+          make_latest: true
           generate_release_notes: true
           files: |
             release/*
