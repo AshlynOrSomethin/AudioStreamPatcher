@@ -1,2 +1,2 @@
 # AudioStreamPatcher
-Patches the AudioStream of firefox (and some derivatives) to have the system browser stream volume independent of the browsers media volume
+This patch modifies Firefox/Zen's AudioStream.cpp to apply per-tab volume changes in software instead of forwarding them to the system audio mixer (PipeWire/PulseAudio), so per-tab volume sliders no longer change your system-wide app volume.

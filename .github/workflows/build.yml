@@ -1,0 +1,35 @@
+name: Build Zen with patch
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4  # your repo, just contains the patch + scripts
+
+      - name: Clone Zen
+        run: git clone https://github.com/zen-browser/desktop.git --depth 10 zen
+
+      - name: Apply patch
+        run: |
+          cd zen/engine
+          patch -p1 < ../../software-volume.patch
+          git add -A
+          git commit -m "Apply software volume patch"
+
+      - name: Install deps and build
+        run: |
+          cd zen
+          npm i
+          npm run init
+          npm run build
+
+      - name: Package artifact
+        run: tar czf zen-patched.tar.gz -C zen/obj-*/dist <appropriate build output dir>
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zen-patched
+          path: zen-patched.tar.gz
