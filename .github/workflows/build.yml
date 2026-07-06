@@ -17,7 +17,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libpulse-dev
+          sudo apt-get install -y libasound2-dev libpulse-dev cbindgen
 
       - name: Clone Zen
         run: git clone https://github.com/zen-browser/desktop.git --depth 10 zen
