@@ -38,7 +38,9 @@ jobs:
             libxdamage-dev \
             libxfixes-dev \
             libxi-dev \
-            nasm
+            nasm \
+            llvm \
+            llvm-dev
 
       - name: Install cbindgen
         run: |
