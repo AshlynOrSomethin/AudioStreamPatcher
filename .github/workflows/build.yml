@@ -9,6 +9,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4  # your repo, just contains the patch + scripts
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev
+
       - name: Clone Zen
         run: git clone https://github.com/zen-browser/desktop.git --depth 10 zen
 
