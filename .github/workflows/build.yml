@@ -17,7 +17,12 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libpulse-dev cbindgen
+          sudo apt-get install -y libasound2-dev libpulse-dev
+
+      - name: Install cbindgen
+        run: |
+          cargo install cbindgen --version 0.29.1 --locked --force
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Clone Zen
         run: git clone https://github.com/zen-browser/desktop.git --depth 10 zen
