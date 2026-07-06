@@ -39,11 +39,14 @@ jobs:
             libxfixes-dev \
             libxi-dev \
             nasm \
+            clang \
+            libclang-dev \
             llvm \
             llvm-dev
 
       - name: Install cbindgen
         run: |
+          rustup component add rustfmt
           cargo install cbindgen --version 0.29.1 --locked --force
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
