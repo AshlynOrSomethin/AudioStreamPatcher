@@ -140,19 +140,19 @@ jobs:
           ln -sf "../lib/zen-patched/$BIN_NAME" AppDir/usr/bin/zen-patched
 
           cat > AppDir/AppRun <<EOF
-#!/bin/sh
-exec "\$APPDIR/usr/lib/zen-patched/$BIN_NAME" "\$@"
-EOF
+          #!/bin/sh
+          exec "\$APPDIR/usr/lib/zen-patched/$BIN_NAME" "\$@"
+          EOF
           chmod +x AppDir/AppRun
 
           cat > AppDir/usr/share/applications/zen-patched.desktop <<EOF
-[Desktop Entry]
-Type=Application
-Name=Zen Patched
-Exec=zen-patched
-Icon=zen-patched
-Categories=Network;WebBrowser;
-EOF
+          [Desktop Entry]
+          Type=Application
+          Name=Zen Patched
+          Exec=zen-patched
+          Icon=zen-patched
+          Categories=Network;WebBrowser;
+          EOF
 
           icon_path=$(find "$DIST_DIR" -type f \( -name "*256*.png" -o -name "*.png" \) | head -n 1 || true)
           if [ -n "${icon_path:-}" ]; then
