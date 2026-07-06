@@ -22,7 +22,18 @@ jobs:
             libpulse-dev \
             libgtk-3-dev \
             libxkbcommon-dev \
-            libpango1.0-dev
+            libpango1.0-dev \
+            libx11-dev \
+            libxcb1-dev \
+            libxcb-shm0-dev \
+            libx11-xcb-dev \
+            libxext-dev \
+            libxrandr-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxdamage-dev \
+            libxfixes-dev \
+            libxi-dev
 
       - name: Install cbindgen
         run: |
