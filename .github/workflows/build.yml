@@ -145,7 +145,7 @@ jobs:
           cp zen-patched.tar.gz release/
 
           sudo apt-get update
-          sudo apt-get install -y ruby ruby-dev build-essential rpm zstd
+          sudo apt-get install -y ruby ruby-dev build-essential rpm zstd libarchive-tools
           sudo gem install --no-document fpm
 
           rm -rf pkgroot
@@ -163,10 +163,10 @@ jobs:
           VERSION="$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}"
           ARCH="x86_64"
           APPDIR="build/AppDir"
-          INPUT_TAR="release/zen-patched-linux-x86_64.tar.zst"
+          DIST_DIR="${{ steps.package.outputs.dist_dir }}"
 
-          if [ ! -f "$INPUT_TAR" ]; then
-            echo "Missing AppImage input tarball: $INPUT_TAR"
+          if [ ! -d "${DIST_DIR:-}" ]; then
+            echo "Missing DIST_DIR from build output. Skipping AppImage build."
             exit 0
           fi
 
@@ -176,16 +176,9 @@ jobs:
             sudo apt-get install -y libfuse2t64
           fi
 
-          rm -rf "$APPDIR" appimage-root appimage-input
-          mkdir -p "$APPDIR" appimage-root appimage-input release
-
-          tar --zstd -xf "$INPUT_TAR" -C appimage-input
-
-          if [ -d appimage-input/zen ]; then
-            cp -a appimage-input/zen/. "$APPDIR"/
-          else
-            cp -a appimage-input/. "$APPDIR"/
-          fi
+          rm -rf "$APPDIR" appimage-root
+          mkdir -p "$APPDIR" appimage-root release
+          cp -a "$DIST_DIR"/. "$APPDIR"/
 
           DESKTOP_FILE="$(find "$APPDIR" -maxdepth 3 -type f -name "*.desktop" | head -n 1 || true)"
           if [ -z "${DESKTOP_FILE:-}" ]; then
