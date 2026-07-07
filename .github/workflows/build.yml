@@ -142,7 +142,7 @@ jobs:
           fi
 
           sudo apt-get update
-          sudo apt-get install -y desktop-file-utils appstream
+          sudo apt-get install -y desktop-file-utils appstream file
           if ! sudo apt-get install -y libfuse2; then
             sudo apt-get install -y libfuse2t64
           fi
@@ -222,13 +222,22 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
+          DIST_DIR="${{ steps.package.outputs.dist_dir }}"
+
+          if [ ! -d "${DIST_DIR:-}" ]; then
+            echo "Missing DIST_DIR from build output. Skipping Flatpak bundle."
+            exit 0
+          fi
+
           if [ -f zen/build/flatpak/app.zen_browser.zen.yml ]; then
             manifest="zen/build/flatpak/app.zen_browser.zen.yml"
-          elif [ -f zen/build/flatpak/app.zen_browser.zen.yml.template ]; then
-            cp zen/build/flatpak/app.zen_browser.zen.yml.template /tmp/zen-flatpak.yml
-            manifest="/tmp/zen-flatpak.yml"
           else
-            echo "No Flatpak manifest found. Skipping."
+            echo "Zen does not ship a rendered Flatpak manifest in this checkout. Skipping Flatpak bundle."
+            exit 0
+          fi
+
+          if grep -q '{[^}][^}]*}' "$manifest"; then
+            echo "Flatpak manifest still contains unresolved template placeholders. Skipping Flatpak bundle."
             exit 0
           fi
 
@@ -260,7 +269,40 @@ jobs:
           sudo flatpak info --system "$runtime_ref"
           sudo flatpak info --system "$sdk_ref"
 
-          sudo flatpak-builder --install-deps-from=flathub --repo=flatpak-repo --force-clean flatpak-build "$manifest"
+          flatpak_src="$RUNNER_TEMP/zen.linux-x86_64.tar.xz"
+          tar -cJf "$flatpak_src" -C "$DIST_DIR" .
+          flatpak_sha=$(sha256sum "$flatpak_src" | awk '{print $1}')
+
+          patched_manifest="$RUNNER_TEMP/zen-flatpak.patched.yml"
+          awk -v src="$flatpak_src" -v sha="$flatpak_sha" '
+            {
+              if ($0 ~ /zen\.linux-x86_64\.tar\.xz/) {
+                if ($0 ~ /url:[[:space:]]*/) {
+                  sub(/url:[[:space:]]*.*/, "path: " src)
+                } else if ($0 ~ /path:[[:space:]]*/) {
+                  sub(/path:[[:space:]]*.*/, "path: " src)
+                }
+
+                print
+
+                if (getline nextline > 0) {
+                  if (nextline ~ /^[[:space:]]*sha256:/) {
+                    sub(/sha256:[[:space:]]*.*/, "sha256: " sha, nextline)
+                    print nextline
+                  } else {
+                    print "        sha256: " sha
+                    print nextline
+                  }
+                }
+                next
+              }
+              print
+            }
+          ' "$manifest" > "$patched_manifest"
+
+          echo "Using patched Flatpak manifest with local source: $patched_manifest"
+
+          sudo flatpak-builder --install-deps-from=flathub --repo=flatpak-repo --force-clean flatpak-build "$patched_manifest"
           mkdir -p release
           sudo flatpak build-bundle flatpak-repo release/zen-patched.flatpak app.zen_browser.zen
 
