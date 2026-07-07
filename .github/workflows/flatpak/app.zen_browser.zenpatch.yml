@@ -48,6 +48,14 @@ modules:
     build-commands:
       - mv zen /app/
       - mkdir -p /app/etc/zen
+      - |
+        set -euo pipefail
+        if [ -x /app/zen/bin/zen ] && [ ! -e /app/zen/zen ]; then
+          ln -s bin/zen /app/zen/zen
+        fi
+        if [ -x /app/zen/bin/zen-bin ] && [ ! -e /app/zen/zen-bin ]; then
+          ln -s bin/zen-bin /app/zen/zen-bin
+        fi
       - install -Dm0755 metadata/launch-script.sh ${FLATPAK_DEST}/bin/launch-script.sh
       - install -Dm0644 metadata/policies.json ${FLATPAK_DEST}/bin/distribution/policies.json
       - install -Dm0644 metadata/icons/app.zen_browser.zen.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/app.zen_browser.zenpatch.svg

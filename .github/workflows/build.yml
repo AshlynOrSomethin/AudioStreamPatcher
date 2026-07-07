@@ -195,9 +195,20 @@ jobs:
               > "$DESKTOP_FILE"
           fi
 
-          app_exec=$(awk -F= '/^Exec=/{print $2; exit}' "$DESKTOP_FILE" | sed -E 's/[[:space:]]+%[A-Za-z]//g' | awk '{print $1}' || true)
+          app_exec_raw=$(awk -F= '/^Exec=/{print $2; exit}' "$DESKTOP_FILE" | sed -E 's/[[:space:]]+%[A-Za-z]//g' | awk '{print $1}' || true)
+          app_exec=""
+
+          if [ -n "${app_exec_raw:-}" ]; then
+            for probe in "$app_exec_raw" "$(basename "$app_exec_raw")" "bin/$app_exec_raw" "bin/$(basename "$app_exec_raw")"; do
+              if [ -x "$APPDIR/$probe" ]; then
+                app_exec="$probe"
+                break
+              fi
+            done
+          fi
+
           if [ -z "${app_exec:-}" ]; then
-            for candidate in zen zen-bin firefox firefox-bin browser; do
+            for candidate in zen zen-bin firefox firefox-bin browser bin/zen bin/zen-bin bin/firefox bin/firefox-bin; do
               if [ -x "$APPDIR/$candidate" ]; then
                 app_exec="$candidate"
                 break
@@ -206,7 +217,11 @@ jobs:
           fi
 
           if [ -z "${app_exec:-}" ]; then
-            app_exec=$(find "$APPDIR" -maxdepth 1 -type f -executable | head -n 1 | xargs -r basename || true)
+            app_exec=$(find "$APPDIR/bin" -maxdepth 1 -type f -executable 2>/dev/null | head -n 1 | sed "s|$APPDIR/||" || true)
+          fi
+
+          if [ -z "${app_exec:-}" ]; then
+            app_exec=$(find "$APPDIR" -maxdepth 1 -type f -executable | head -n 1 | sed "s|$APPDIR/||" || true)
           fi
 
           if [ -z "${app_exec:-}" ]; then
