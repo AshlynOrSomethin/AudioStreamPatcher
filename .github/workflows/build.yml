@@ -16,6 +16,8 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4  # your repo, just contains the patch + scripts
+        with:
+          clean: false
 
       - name: Install system dependencies
         run: |
@@ -223,11 +225,17 @@ jobs:
         run: |
           set -euo pipefail
           DIST_DIR="${{ steps.package.outputs.dist_dir }}"
+          FLATPAK_BUILD_DIR="$RUNNER_TEMP/flatpak-build"
+          FLATPAK_REPO_DIR="$RUNNER_TEMP/flatpak-repo"
+          FLATPAK_STATE_DIR="$RUNNER_TEMP/flatpak-state"
 
           if [ ! -d "${DIST_DIR:-}" ]; then
             echo "Missing DIST_DIR from build output. Skipping Flatpak bundle."
             exit 0
           fi
+
+          rm -rf "$FLATPAK_BUILD_DIR" "$FLATPAK_REPO_DIR" "$FLATPAK_STATE_DIR"
+          mkdir -p "$FLATPAK_BUILD_DIR" "$FLATPAK_REPO_DIR" "$FLATPAK_STATE_DIR"
 
           if [ -f zen/build/flatpak/app.zen_browser.zen.yml ]; then
             manifest="zen/build/flatpak/app.zen_browser.zen.yml"
@@ -302,9 +310,10 @@ jobs:
 
           echo "Using patched Flatpak manifest with local source: $patched_manifest"
 
-          sudo flatpak-builder --install-deps-from=flathub --repo=flatpak-repo --force-clean flatpak-build "$patched_manifest"
+          sudo flatpak-builder --state-dir="$FLATPAK_STATE_DIR" --install-deps-from=flathub --repo="$FLATPAK_REPO_DIR" --force-clean "$FLATPAK_BUILD_DIR" "$patched_manifest"
           mkdir -p release
-          sudo flatpak build-bundle flatpak-repo release/zen-patched.flatpak app.zen_browser.zen
+          sudo flatpak build-bundle "$FLATPAK_REPO_DIR" release/zen-patched.flatpak app.zen_browser.zen
+          sudo chown -R "$(id -u):$(id -g)" release || true
 
       - uses: actions/upload-artifact@v4
         with:
