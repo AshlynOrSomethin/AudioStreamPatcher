@@ -149,12 +149,16 @@ jobs:
           sudo gem install --no-document fpm
 
           rm -rf pkgroot
-          mkdir -p pkgroot/opt/zen-patched
-          cp -a "$DIST_DIR"/. pkgroot/opt/zen-patched/
+          mkdir -p pkgroot/usr/lib/zen-patched pkgroot/usr/bin
+          cp -a "$DIST_DIR"/. pkgroot/usr/lib/zen-patched/
+          ln -s ../lib/zen-patched/bin/zen pkgroot/usr/bin/zen
+          if [ -e pkgroot/usr/lib/zen-patched/bin/zen-bin ]; then
+            ln -s ../lib/zen-patched/bin/zen-bin pkgroot/usr/bin/zen-bin
+          fi
 
-          fpm -s dir -t deb -n zen-patched -v "$VERSION" -C pkgroot -p "release/zen-patched_${VERSION}_amd64.deb" opt
-          fpm -s dir -t rpm -n zen-patched -v "$VERSION" -C pkgroot -p "release/zen-patched-${VERSION}.x86_64.rpm" opt
-          fpm -s dir -t pacman -n zen-patched -v "$VERSION" -C pkgroot -p "release/zen-patched-${VERSION}-x86_64.pkg.tar.zst" opt
+          fpm -s dir -t deb -n zen-patched -v "$VERSION" -C pkgroot -p "release/zen-patched_${VERSION}_amd64.deb" usr
+          fpm -s dir -t rpm -n zen-patched -v "$VERSION" -C pkgroot -p "release/zen-patched-${VERSION}.x86_64.rpm" usr
+          fpm -s dir -t pacman -n zen-patched -v "$VERSION" -C pkgroot -p "release/zen-patched-${VERSION}-x86_64.pkg.tar.zst" usr
 
       - name: Build AppImage (best effort)
         continue-on-error: true
