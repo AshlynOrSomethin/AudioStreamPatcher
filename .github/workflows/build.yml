@@ -144,7 +144,6 @@ jobs:
           mkdir -p release
           cp zen-patched.tar.gz release/
           tar --zstd -cf release/zen-patched-linux-x86_64.tar.zst -C "$DIST_DIR" .
-          cp release/zen-patched-linux-x86_64.tar.zst release/zen-patched-linux-x86_64.pkg.tar.zst
 
           sudo apt-get update
           sudo apt-get install -y ruby ruby-dev build-essential rpm zstd
@@ -156,6 +155,7 @@ jobs:
 
           fpm -s dir -t deb -n zen-patched -v "$VERSION" -C pkgroot -p "release/zen-patched_${VERSION}_amd64.deb" opt
           fpm -s dir -t rpm -n zen-patched -v "$VERSION" -C pkgroot -p "release/zen-patched-${VERSION}.x86_64.rpm" opt
+          fpm -s dir -t pacman -n zen-patched -v "$VERSION" -C pkgroot -p "release/zen-patched-${VERSION}-x86_64.pkg.tar.zst" opt
 
       - name: Build AppImage (best effort)
         continue-on-error: true
