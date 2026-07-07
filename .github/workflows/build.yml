@@ -60,10 +60,14 @@ jobs:
             libxfixes-dev \
             libxi-dev \
             nasm \
-            clang \
-            libclang-dev \
-            llvm \
-            llvm-dev
+            clang-17 \
+            libclang-17-dev \
+            llvm-17 \
+            llvm-17-dev
+
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-17 170
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-17 170
+          sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-17 170
 
       - name: Install cbindgen
         run: |
