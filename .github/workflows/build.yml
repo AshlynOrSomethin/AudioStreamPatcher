@@ -219,6 +219,8 @@ jobs:
             exit 0
           fi
 
+          app_run_line="exec \"$APPDIR/$app_exec\" \"\$@\""
+
           mkdir -p "$APPDIR/usr/share/icons/hicolor/128x128/apps"
           icon_path=$(find "$APPDIR" -type f \( -name "*128*.png" -o -name "*256*.png" -o -name "*.png" \) | head -n 1 || true)
           if [ -n "${icon_path:-}" ]; then
@@ -227,9 +229,12 @@ jobs:
             ln -sf zen.png "$APPDIR/.DirIcon"
           fi
 
+          cp "$DESKTOP_FILE" "$APPDIR/zen-patched.desktop"
+          sed -i -E 's/^Exec=.*/Exec=zen-patched/; s/^Icon=.*/Icon=zen/' "$APPDIR/zen-patched.desktop"
+
           printf '%s\n' \
             '#!/bin/sh' \
-            "exec \"\\$APPDIR/$app_exec\" \"\\$@\"" \
+            "$app_run_line" \
             > "$APPDIR/AppRun"
           chmod +x "$APPDIR/AppRun"
 
