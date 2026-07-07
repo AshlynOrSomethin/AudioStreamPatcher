@@ -1,0 +1,71 @@
+app-id: app.zen_browser.zenpatch
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+base: org.mozilla.firefox.BaseApp
+base-version: '25.08'
+add-extensions:
+  app.zen_browser.zenpatch.systemconfig:
+    directory: etc/zen
+    no-autodownload: true
+command: launch-script.sh
+finish-args:
+  - --allow=devel
+  - --share=ipc
+  - --share=network
+  - --socket=pulseaudio
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pcsc
+  - --socket=cups
+  - --persist=.zen
+  - --env=DICPATH=/usr/share/hunspell
+  - --filesystem=xdg-download:rw
+  - --filesystem=/run/.heim_org.h5l.kcm-socket
+  - --filesystem=xdg-run/speech-dispatcher:ro
+  - --device=all
+  - --talk-name=org.freedesktop.FileManager1
+  - --system-talk-name=org.freedesktop.NetworkManager
+  - --talk-name=org.a11y.Bus
+  - --talk-name=org.gtk.vfs.*
+  - --own-name=org.mpris.MediaPlayer2.firefox.*
+  - --own-name=org.mozilla.zenpatch.*
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/pkgconfig
+  - /share/aclocal
+  - /share/gtk-doc
+  - /share/doc
+  - /share/info
+  - /man
+  - /share/man
+  - '*.la'
+  - '*.a'
+modules:
+  - name: zen_browser
+    buildsystem: simple
+    build-commands:
+      - mv zen /app/
+      - mkdir -p /app/etc/zen /tmp/zenpatch-meta
+      - install -Dm0755 metadata/launch-script.sh ${FLATPAK_DEST}/bin/launch-script.sh
+      - install -Dm0644 metadata/policies.json ${FLATPAK_DEST}/bin/distribution/policies.json
+      - install -Dm0644 metadata/icons/app.zen_browser.zen.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/app.zen_browser.zenpatch.svg
+      - cp metadata/app.zen_browser.zen.desktop /tmp/zenpatch-meta/app.zen_browser.zenpatch.desktop
+      - sed -i 's/app\.zen_browser\.zen/app.zen_browser.zenpatch/g; s/org\.mozilla\.zen\./org.mozilla.zenpatch./g; s/Zen Browser/Zen Patched/g' /tmp/zenpatch-meta/app.zen_browser.zenpatch.desktop
+      - install -Dm0644 /tmp/zenpatch-meta/app.zen_browser.zenpatch.desktop ${FLATPAK_DEST}/share/applications/app.zen_browser.zenpatch.desktop
+      - cp metadata/app.zen_browser.zen.metainfo.xml /tmp/zenpatch-meta/app.zen_browser.zenpatch.metainfo.xml
+      - sed -i 's/app\.zen_browser\.zen/app.zen_browser.zenpatch/g; s/org\.mozilla\.zen\./org.mozilla.zenpatch./g; s/Zen Browser/Zen Patched/g' /tmp/zenpatch-meta/app.zen_browser.zenpatch.metainfo.xml
+      - install -Dm0644 /tmp/zenpatch-meta/app.zen_browser.zenpatch.metainfo.xml ${FLATPAK_DEST}/share/metainfo/app.zen_browser.zenpatch.metainfo.xml
+    sources:
+      - type: archive
+        path: __ZEN_TAR_PATH__
+        sha256: __ZEN_TAR_SHA256__
+        strip-components: 0
+        only-arches:
+          - x86_64
+      - type: archive
+        url: https://github.com/zen-browser/flatpak/releases/download/1.21.5b/archive.tar
+        sha256: 40e664671a316c052b00bd71efc546f8c561ab515bce7f0a02f51f7af679b1cf
+        strip-components: 0
+        dest: metadata

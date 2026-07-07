@@ -74,6 +74,11 @@ jobs:
           cd zen/engine
           patch -p1 < ../../.github/workflows/patches/software-volume.patch
 
+      - name: Update en-US packs
+        run: |
+          cd zen
+          python3 ./scripts/update_en_US_packs.py
+
       - name: Adjust mozconfig for CI
         run: |
           cd zen
@@ -174,6 +179,10 @@ jobs:
               > "$DESKTOP_FILE"
           fi
 
+              ROOT_DESKTOP="$APPDIR/zen.desktop"
+              cp "$DESKTOP_FILE" "$ROOT_DESKTOP"
+              sed -i -E 's/^Exec=.*/Exec=zen-patched/; s/^Icon=.*/Icon=zen/' "$ROOT_DESKTOP"
+
           app_exec=$(awk -F= '/^Exec=/{print $2; exit}' "$DESKTOP_FILE" | sed -E 's/[[:space:]]+%[A-Za-z]//g' | awk '{print $1}' || true)
           if [ -z "${app_exec:-}" ]; then
             for candidate in zen zen-bin firefox firefox-bin browser; do
@@ -237,16 +246,10 @@ jobs:
           rm -rf "$FLATPAK_BUILD_DIR" "$FLATPAK_REPO_DIR" "$FLATPAK_STATE_DIR"
           mkdir -p "$FLATPAK_BUILD_DIR" "$FLATPAK_REPO_DIR" "$FLATPAK_STATE_DIR"
 
-          if [ -f zen/build/flatpak/app.zen_browser.zen.yml ]; then
-            manifest="zen/build/flatpak/app.zen_browser.zen.yml"
-          else
-            echo "Zen does not ship a rendered Flatpak manifest in this checkout. Skipping Flatpak bundle."
-            exit 0
-          fi
-
-          if grep -q '{[^}][^}]*}' "$manifest"; then
-            echo "Flatpak manifest still contains unresolved template placeholders. Skipping Flatpak bundle."
-            exit 0
+          manifest_template=".github/workflows/flatpak/app.zen_browser.zenpatch.yml"
+          if [ ! -f "$manifest_template" ]; then
+            echo "Missing Flatpak manifest template: $manifest_template"
+            exit 1
           fi
 
           sudo apt-get update
@@ -256,9 +259,9 @@ jobs:
             sudo flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           fi
 
-          runtime=$(awk -F': *' '/^[[:space:]]*runtime:[[:space:]]*/ {v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^["'"'"']|["'"'"']$/, "", v); print v; exit}' "$manifest")
-          sdk=$(awk -F': *' '/^[[:space:]]*sdk:[[:space:]]*/ {v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^["'"'"']|["'"'"']$/, "", v); print v; exit}' "$manifest")
-          runtime_version=$(awk -F': *' '/^[[:space:]]*runtime-version:[[:space:]]*/ {v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^["'"'"']|["'"'"']$/, "", v); print v; exit}' "$manifest")
+          runtime=$(awk -F': *' '/^[[:space:]]*runtime:[[:space:]]*/ {v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^["'"'"']|["'"'"']$/, "", v); print v; exit}' "$manifest_template")
+          sdk=$(awk -F': *' '/^[[:space:]]*sdk:[[:space:]]*/ {v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^["'"'"']|["'"'"']$/, "", v); print v; exit}' "$manifest_template")
+          runtime_version=$(awk -F': *' '/^[[:space:]]*runtime-version:[[:space:]]*/ {v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^["'"'"']|["'"'"']$/, "", v); print v; exit}' "$manifest_template")
 
           arch="x86_64"
           echo "Flatpak manifest runtime=${runtime:-<empty>} sdk=${sdk:-<empty>} runtime-version=${runtime_version:-<empty>} arch=$arch"
@@ -277,36 +280,19 @@ jobs:
           sudo flatpak info --system "$runtime_ref"
           sudo flatpak info --system "$sdk_ref"
 
+          flatpak_stage="$RUNNER_TEMP/flatpak-src"
           flatpak_src="$RUNNER_TEMP/zen.linux-x86_64.tar.xz"
-          tar -cJf "$flatpak_src" -C "$DIST_DIR" .
+          rm -rf "$flatpak_stage"
+          mkdir -p "$flatpak_stage/zen"
+          cp -a "$DIST_DIR"/. "$flatpak_stage/zen"/
+          tar -cJf "$flatpak_src" -C "$flatpak_stage" zen
           flatpak_sha=$(sha256sum "$flatpak_src" | awk '{print $1}')
 
           patched_manifest="$RUNNER_TEMP/zen-flatpak.patched.yml"
-          awk -v src="$flatpak_src" -v sha="$flatpak_sha" '
-            {
-              if ($0 ~ /zen\.linux-x86_64\.tar\.xz/) {
-                if ($0 ~ /url:[[:space:]]*/) {
-                  sub(/url:[[:space:]]*.*/, "path: " src)
-                } else if ($0 ~ /path:[[:space:]]*/) {
-                  sub(/path:[[:space:]]*.*/, "path: " src)
-                }
-
-                print
-
-                if (getline nextline > 0) {
-                  if (nextline ~ /^[[:space:]]*sha256:/) {
-                    sub(/sha256:[[:space:]]*.*/, "sha256: " sha, nextline)
-                    print nextline
-                  } else {
-                    print "        sha256: " sha
-                    print nextline
-                  }
-                }
-                next
-              }
-              print
-            }
-          ' "$manifest" > "$patched_manifest"
+          sed \
+            -e "s|__ZEN_TAR_PATH__|$flatpak_src|g" \
+            -e "s|__ZEN_TAR_SHA256__|$flatpak_sha|g" \
+            "$manifest_template" > "$patched_manifest"
 
           echo "Using patched Flatpak manifest with local source: $patched_manifest"
 
