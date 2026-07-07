@@ -125,16 +125,39 @@ jobs:
           mkdir -p "$portable_dir"
           cp -aL "$dist_dir"/. "$portable_dir"/
 
-          tar czf firefox-patched.tar.gz -C "$portable_dir" .
+          app_ini=""
+          for candidate in "$portable_dir/application.ini" "$portable_dir/bin/application.ini"; do
+            if [ -f "$candidate" ]; then
+              app_ini="$candidate"
+              break
+            fi
+          done
+          if [ -z "$app_ini" ]; then
+            echo "No application.ini found under $portable_dir"
+            exit 1
+          fi
+
+          APP_VERSION="$(awk -F= '/^Version=/{print $2; exit}' "$app_ini" | tr -d '\r')"
+          if [ -z "$APP_VERSION" ]; then
+            echo "No Version entry found in $app_ini"
+            exit 1
+          fi
+
+          ARTIFACT_BASENAME="firefox-patched-${APP_VERSION}"
+
+          tar czf "${ARTIFACT_BASENAME}.tar.gz" -C "$portable_dir" .
           echo "dist_dir=$portable_dir" >> "$GITHUB_OUTPUT"
+          echo "app_version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+          echo "artifact_basename=$ARTIFACT_BASENAME" >> "$GITHUB_OUTPUT"
 
       - name: Build distributable packages
         run: |
           set -euo pipefail
-          VERSION="$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}"
+          VERSION="${{ steps.package.outputs.app_version }}"
+          ARTIFACT_BASENAME="${{ steps.package.outputs.artifact_basename }}"
           DIST_DIR="${{ steps.package.outputs.dist_dir }}"
           mkdir -p release
-          cp firefox-patched.tar.gz release/
+          cp "${ARTIFACT_BASENAME}.tar.gz" release/
 
           sudo apt-get update
           sudo apt-get install -y ruby ruby-dev build-essential rpm zstd libarchive-tools
@@ -148,9 +171,9 @@ jobs:
             ln -s ../lib/firefox-patched/bin/firefox-bin pkgroot/usr/bin/firefox-bin
           fi
 
-          fpm -s dir -t deb -n firefox-patched -v "$VERSION" -C pkgroot -p "release/firefox-patched_${VERSION}_amd64.deb" usr
-          fpm -s dir -t rpm -n firefox-patched -v "$VERSION" -C pkgroot -p "release/firefox-patched-${VERSION}.x86_64.rpm" usr
-          fpm -s dir -t pacman -n firefox-patched -v "$VERSION" -C pkgroot -p "release/firefox-patched-${VERSION}-x86_64.pkg.tar.zst" usr
+          fpm -s dir -t deb -n firefox-patched -v "$VERSION" -C pkgroot -p "release/${ARTIFACT_BASENAME}-amd64.deb" usr
+          fpm -s dir -t rpm -n firefox-patched -v "$VERSION" -C pkgroot -p "release/${ARTIFACT_BASENAME}-x86_64.rpm" usr
+          fpm -s dir -t pacman -n firefox-patched -v "$VERSION" -C pkgroot -p "release/${ARTIFACT_BASENAME}-x86_64.pkg.tar.zst" usr
 
       - name: Build AppImage (best effort)
         continue-on-error: true
@@ -159,6 +182,9 @@ jobs:
           ARCH="x86_64"
           APPDIR="build/AppDir"
           DIST_DIR="${{ steps.package.outputs.dist_dir }}"
+          ARTIFACT_BASENAME="${{ steps.package.outputs.artifact_basename }}"
+          APPIMAGE_NAME="${ARTIFACT_BASENAME}-${ARCH}.AppImage"
+          APPIMAGE_ZSYNC_NAME="${APPIMAGE_NAME}.zsync"
 
           sudo apt-get update
           sudo apt-get install -y desktop-file-utils appstream file
@@ -216,16 +242,16 @@ jobs:
           printf '#!/bin/sh\nexec "$APPDIR/%s" "$@"\n' "$app_exec" > "$APPDIR/AppRun"
           chmod +x "$APPDIR/AppRun"
 
-          UPINFO="gh-releases-zsync|$GITHUB_REPOSITORY_OWNER|AudioStreamPatcher|latest|firefox-patched-${ARCH}.AppImage.zsync"
+          UPINFO="gh-releases-zsync|$GITHUB_REPOSITORY_OWNER|AudioStreamPatcher|latest|${APPIMAGE_ZSYNC_NAME}"
           wget "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O appimagetool-x86_64.AppImage
           wget "https://github.com/VHSgunzo/uruntime/releases/latest/download/uruntime-appimage-squashfs-lite-$ARCH" -O "uruntime-appimage-squashfs-lite-$ARCH"
           chmod +x appimagetool-x86_64.AppImage "uruntime-appimage-squashfs-lite-$ARCH"
           sed -i 's|URUNTIME_MOUNT=[0-9]|URUNTIME_MOUNT=0|' "uruntime-appimage-squashfs-lite-$ARCH" || true
 
-          ./appimagetool-x86_64.AppImage -u "$UPINFO" "$APPDIR" "firefox-patched-${ARCH}.AppImage" --runtime-file "./uruntime-appimage-squashfs-lite-$ARCH"
-          mv -f firefox-patched-${ARCH}.AppImage release/
-          if [ -f "firefox-patched-${ARCH}.AppImage.zsync" ]; then
-            mv -f "firefox-patched-${ARCH}.AppImage.zsync" release/
+          ./appimagetool-x86_64.AppImage -u "$UPINFO" "$APPDIR" "$APPIMAGE_NAME" --runtime-file "./uruntime-appimage-squashfs-lite-$ARCH"
+          mv -f "$APPIMAGE_NAME" release/
+          if [ -f "$APPIMAGE_ZSYNC_NAME" ]; then
+            mv -f "$APPIMAGE_ZSYNC_NAME" release/
           fi
 
       - name: Build Flatpak bundle (best effort)
@@ -233,6 +259,7 @@ jobs:
         run: |
           set -euo pipefail
           DIST_DIR="${{ steps.package.outputs.dist_dir }}"
+          ARTIFACT_BASENAME="${{ steps.package.outputs.artifact_basename }}"
           FLATPAK_BUILD_DIR="$RUNNER_TEMP/flatpak-build"
           FLATPAK_REPO_DIR="$RUNNER_TEMP/flatpak-repo"
           FLATPAK_STATE_DIR="$RUNNER_TEMP/flatpak-state"
@@ -285,12 +312,12 @@ jobs:
 
           sudo flatpak-builder --state-dir="$FLATPAK_STATE_DIR" --install-deps-from=flathub --repo="$FLATPAK_REPO_DIR" --force-clean "$FLATPAK_BUILD_DIR" "$patched_manifest"
           mkdir -p release
-          sudo flatpak build-bundle "$FLATPAK_REPO_DIR" release/firefox-patched.flatpak org.mozilla.firefoxpatch
+          sudo flatpak build-bundle "$FLATPAK_REPO_DIR" "release/${ARTIFACT_BASENAME}.flatpak" org.mozilla.firefoxpatch
           sudo chown -R "$(id -u):$(id -g)" release || true
 
       - uses: actions/upload-artifact@v4
         with:
-          name: firefox-patched
+          name: firefox-patched-${{ steps.package.outputs.app_version }}
           path: "release/*"
 
       - name: Publish GitHub release
