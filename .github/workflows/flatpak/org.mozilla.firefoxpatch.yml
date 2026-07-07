@@ -1,0 +1,100 @@
+app-id: org.mozilla.firefoxpatch
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+base: org.mozilla.firefox.BaseApp
+base-version: '25.08'
+command: launch-script.sh
+appstream-compose: false
+finish-args:
+  - --allow=devel
+  - --share=ipc
+  - --share=network
+  - --socket=pulseaudio
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pcsc
+  - --socket=cups
+  - --persist=.mozilla
+  - --env=DICPATH=/usr/share/hunspell
+  - --filesystem=xdg-download:rw
+  - --filesystem=/run/.heim_org.h5l.kcm-socket
+  - --filesystem=xdg-run/speech-dispatcher:ro
+  - --device=all
+  - --talk-name=org.freedesktop.FileManager1
+  - --system-talk-name=org.freedesktop.NetworkManager
+  - --talk-name=org.a11y.Bus
+  - --talk-name=org.gtk.vfs.*
+  - --own-name=org.mpris.MediaPlayer2.firefox.*
+  - --own-name=org.mozilla.firefoxpatch.*
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/pkgconfig
+  - /share/aclocal
+  - /share/gtk-doc
+  - /share/doc
+  - /share/info
+  - /man
+  - /share/man
+  - '*.la'
+  - '*.a'
+modules:
+  - name: firefox
+    buildsystem: simple
+    build-commands:
+      - mv firefox /app/
+      - mkdir -p /app/etc/firefox
+      - |
+        set -euo pipefail
+        if [ -x /app/firefox/bin/firefox ] && [ ! -e /app/firefox/firefox ]; then
+          ln -s bin/firefox /app/firefox/firefox
+        fi
+        if [ -x /app/firefox/bin/firefox-bin ] && [ ! -e /app/firefox/firefox-bin ]; then
+          ln -s bin/firefox-bin /app/firefox/firefox-bin
+        fi
+      - install -Dm0755 metadata/launch-script.sh ${FLATPAK_DEST}/bin/launch-script.sh
+      - install -Dm0644 metadata/distribution.ini ${FLATPAK_DEST}/bin/distribution/distribution.ini
+      - install -Dm0644 metadata/icons/org.mozilla.firefox.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/org.mozilla.firefoxpatch.svg
+      - |
+        set -euo pipefail
+        tmpdir="$(mktemp -d)"
+        cat > "$tmpdir/org.mozilla.firefoxpatch.desktop" <<'EOF'
+        [Desktop Entry]
+        Name=Firefox Patched
+        Exec=launch-script.sh %u
+        Icon=org.mozilla.firefoxpatch
+        Terminal=false
+        Type=Application
+        Categories=Network;WebBrowser;
+        MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+        StartupNotify=true
+        EOF
+        install -Dm0644 "$tmpdir/org.mozilla.firefoxpatch.desktop" ${FLATPAK_DEST}/share/applications/org.mozilla.firefoxpatch.desktop
+        cat > "$tmpdir/org.mozilla.firefoxpatch.metainfo.xml" <<'EOF'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <component type="desktop-application">
+          <id>org.mozilla.firefoxpatch</id>
+          <name>Firefox Patched</name>
+          <summary>Firefox build with AudioStream patch</summary>
+          <metadata_license>CC0-1.0</metadata_license>
+          <project_license>MPL-2.0</project_license>
+          <launchable type="desktop-id">org.mozilla.firefoxpatch.desktop</launchable>
+          <provides>
+            <binary>firefox</binary>
+          </provides>
+        </component>
+        EOF
+        install -Dm0644 "$tmpdir/org.mozilla.firefoxpatch.metainfo.xml" ${FLATPAK_DEST}/share/metainfo/org.mozilla.firefoxpatch.metainfo.xml
+    sources:
+      - type: archive
+        path: __FIREFOX_TAR_PATH__
+        sha256: __FIREFOX_TAR_SHA256__
+        strip-components: 0
+        only-arches:
+          - x86_64
+      - type: archive
+        url: https://github.com/flathub/org.mozilla.firefox/raw/master/sources/metadata.tar
+        sha256: e8879404d11a8d2c0535bb0ddf172f0d79d7f5f257dcc8cff603f0f46f778f42
+        strip-components: 0
+        dest: metadata

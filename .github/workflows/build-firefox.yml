@@ -1,0 +1,301 @@
+name: Build Firefox with patch
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 3 * * *"
+
+jobs:
+  build:
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Clean previous build outputs
+        run: |
+          sudo rm -rf \
+            firefox \
+            build \
+            release \
+            pkgroot \
+            appimage-root \
+            appimagetool-x86_64.AppImage \
+            uruntime-appimage-squashfs-lite-x86_64 \
+            firefox-patched.tar.gz \
+            .flatpak-builder \
+            flatpak-build \
+            flatpak-repo
+
+      - name: Install system dependencies
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "This workflow requires Ubuntu (apt-get not found)."
+            exit 1
+          fi
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libpulse-dev \
+            libgtk-3-dev \
+            libxkbcommon-dev \
+            libpango1.0-dev \
+            libx11-dev \
+            libxcb1-dev \
+            libxcb-shm0-dev \
+            libx11-xcb-dev \
+            libxext-dev \
+            libxrandr-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxdamage-dev \
+            libxfixes-dev \
+            libxi-dev \
+            nasm \
+            curl \
+            clang \
+            libclang-dev \
+            llvm \
+            llvm-dev \
+            python3 \
+            python3-pip \
+            ccache \
+            build-essential \
+            unzip \
+            zip
+
+      - name: Install rust + cbindgen
+        run: |
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          fi
+          . "$HOME/.cargo/env"
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add rustfmt
+          cargo install cbindgen --version 0.29.1 --locked --force
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Clone Firefox
+        run: git clone https://github.com/mozilla/gecko-dev.git --depth 10 firefox
+
+      - name: Apply patch
+        run: |
+          cd firefox
+          patch -p1 < ../.github/workflows/patches/software-volume.patch
+
+      - name: Configure mozconfig for CI
+        run: |
+          cd firefox
+          cat > .mozconfig <<'EOF'
+          ac_add_options --enable-application=browser
+          ac_add_options --disable-debug
+          ac_add_options --enable-optimize
+          ac_add_options --disable-tests
+          ac_add_options --without-wasm-sandboxed-libraries
+          mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-firefox
+          EOF
+
+      - name: Build
+        run: |
+          cd firefox
+          ./mach build
+
+      - name: Package artifact
+        id: package
+        run: |
+          set -euo pipefail
+          dist_dir=$(find firefox -maxdepth 4 -type d -path "*/obj-*/dist" | head -n 1)
+          if [ -z "$dist_dir" ]; then
+            echo "No build dist directory found under firefox/obj-*/dist"
+            exit 1
+          fi
+
+          portable_dir="$RUNNER_TEMP/firefox-dist-portable"
+          rm -rf "$portable_dir"
+          mkdir -p "$portable_dir"
+          cp -aL "$dist_dir"/. "$portable_dir"/
+
+          tar czf firefox-patched.tar.gz -C "$portable_dir" .
+          echo "dist_dir=$portable_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Build distributable packages
+        run: |
+          set -euo pipefail
+          VERSION="$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}"
+          DIST_DIR="${{ steps.package.outputs.dist_dir }}"
+          mkdir -p release
+          cp firefox-patched.tar.gz release/
+
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev build-essential rpm zstd
+          sudo gem install --no-document fpm
+
+          rm -rf pkgroot
+          mkdir -p pkgroot/opt/firefox-patched
+          cp -a "$DIST_DIR"/. pkgroot/opt/firefox-patched/
+
+          fpm -s dir -t deb -n firefox-patched -v "$VERSION" -C pkgroot -p "release/firefox-patched_${VERSION}_amd64.deb" opt
+          fpm -s dir -t rpm -n firefox-patched -v "$VERSION" -C pkgroot -p "release/firefox-patched-${VERSION}.x86_64.rpm" opt
+          fpm -s dir -t pacman -n firefox-patched -v "$VERSION" -C pkgroot -p "release/firefox-patched-${VERSION}-x86_64.pkg.tar.zst" opt
+
+      - name: Build AppImage (best effort)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          ARCH="x86_64"
+          APPDIR="build/AppDir"
+          DIST_DIR="${{ steps.package.outputs.dist_dir }}"
+
+          sudo apt-get update
+          sudo apt-get install -y desktop-file-utils appstream file
+          if ! sudo apt-get install -y libfuse2; then
+            sudo apt-get install -y libfuse2t64
+          fi
+
+          rm -rf "$APPDIR"
+          mkdir -p "$APPDIR" release
+          cp -a "$DIST_DIR"/. "$APPDIR"/
+
+          DESKTOP_FILE="$(find "$APPDIR" -maxdepth 3 -type f -name "*.desktop" | head -n 1 || true)"
+          if [ -z "${DESKTOP_FILE:-}" ]; then
+            mkdir -p "$APPDIR/usr/share/applications"
+            DESKTOP_FILE="$APPDIR/usr/share/applications/firefox-patched.desktop"
+            printf '%s\n' \
+              '[Desktop Entry]' \
+              'Type=Application' \
+              'Name=Firefox Patched' \
+              'Exec=firefox' \
+              'Icon=firefox' \
+              'Categories=Network;WebBrowser;' \
+              > "$DESKTOP_FILE"
+          fi
+
+          app_exec=""
+          for candidate in firefox firefox-bin bin/firefox bin/firefox-bin; do
+            if [ -x "$APPDIR/$candidate" ]; then
+              app_exec="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "${app_exec:-}" ]; then
+            app_exec=$(find "$APPDIR/bin" -maxdepth 1 -type f -executable 2>/dev/null | head -n 1 | sed "s|$APPDIR/||" || true)
+          fi
+
+          if [ -z "${app_exec:-}" ]; then
+            echo "AppImage: could not find executable in $APPDIR"
+            ls -lah "$APPDIR" || true
+            exit 0
+          fi
+
+          mkdir -p "$APPDIR/usr/share/icons/hicolor/128x128/apps"
+          icon_path=$(find "$APPDIR" -type f \( -name "*128*.png" -o -name "*256*.png" -o -name "*.png" \) | head -n 1 || true)
+          if [ -n "${icon_path:-}" ]; then
+            cp "$icon_path" "$APPDIR/usr/share/icons/hicolor/128x128/apps/firefox.png"
+            cp "$icon_path" "$APPDIR/firefox.png"
+            ln -sf firefox.png "$APPDIR/.DirIcon"
+          fi
+
+          cp "$DESKTOP_FILE" "$APPDIR/firefox.desktop"
+          sed -i -E 's/^Exec=.*/Exec=firefox-patched/; s/^Icon=.*/Icon=firefox/' "$APPDIR/firefox.desktop"
+
+          printf '#!/bin/sh\nexec "$APPDIR/%s" "$@"\n' "$app_exec" > "$APPDIR/AppRun"
+          chmod +x "$APPDIR/AppRun"
+
+          UPINFO="gh-releases-zsync|$GITHUB_REPOSITORY_OWNER|AudioStreamPatcher|latest|firefox-patched-${ARCH}.AppImage.zsync"
+          wget "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O appimagetool-x86_64.AppImage
+          wget "https://github.com/VHSgunzo/uruntime/releases/latest/download/uruntime-appimage-squashfs-lite-$ARCH" -O "uruntime-appimage-squashfs-lite-$ARCH"
+          chmod +x appimagetool-x86_64.AppImage "uruntime-appimage-squashfs-lite-$ARCH"
+          sed -i 's|URUNTIME_MOUNT=[0-9]|URUNTIME_MOUNT=0|' "uruntime-appimage-squashfs-lite-$ARCH" || true
+
+          ./appimagetool-x86_64.AppImage -u "$UPINFO" "$APPDIR" "firefox-patched-${ARCH}.AppImage" --runtime-file "./uruntime-appimage-squashfs-lite-$ARCH"
+          mv -f firefox-patched-${ARCH}.AppImage release/
+          if [ -f "firefox-patched-${ARCH}.AppImage.zsync" ]; then
+            mv -f "firefox-patched-${ARCH}.AppImage.zsync" release/
+          fi
+
+      - name: Build Flatpak bundle (best effort)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          DIST_DIR="${{ steps.package.outputs.dist_dir }}"
+          FLATPAK_BUILD_DIR="$RUNNER_TEMP/flatpak-build"
+          FLATPAK_REPO_DIR="$RUNNER_TEMP/flatpak-repo"
+          FLATPAK_STATE_DIR="$RUNNER_TEMP/flatpak-state"
+
+          if [ ! -d "${DIST_DIR:-}" ]; then
+            echo "Missing DIST_DIR from build output. Skipping Flatpak bundle."
+            exit 0
+          fi
+
+          sudo rm -rf "$FLATPAK_BUILD_DIR" "$FLATPAK_REPO_DIR" "$FLATPAK_STATE_DIR"
+          mkdir -p "$FLATPAK_BUILD_DIR" "$FLATPAK_REPO_DIR" "$FLATPAK_STATE_DIR"
+
+          manifest_template=".github/workflows/flatpak/org.mozilla.firefoxpatch.yml"
+          if [ ! -f "$manifest_template" ]; then
+            echo "Missing Flatpak manifest template: $manifest_template"
+            exit 1
+          fi
+
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder appstream-compose
+
+          if ! sudo flatpak remotes --system --columns=name | grep -qx flathub; then
+            sudo flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          fi
+
+          runtime=$(awk -F': *' '/^[[:space:]]*runtime:[[:space:]]*/ {v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^["'"'"']|["'"'"']$/, "", v); print v; exit}' "$manifest_template")
+          sdk=$(awk -F': *' '/^[[:space:]]*sdk:[[:space:]]*/ {v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^["'"'"']|["'"'"']$/, "", v); print v; exit}' "$manifest_template")
+          runtime_version=$(awk -F': *' '/^[[:space:]]*runtime-version:[[:space:]]*/ {v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^["'"'"']|["'"'"']$/, "", v); print v; exit}' "$manifest_template")
+
+          arch="x86_64"
+          runtime_ref="${runtime}/${arch}/${runtime_version}"
+          sdk_ref="${sdk}/${arch}/${runtime_version}"
+
+          sudo flatpak install -y --system flathub "$runtime_ref" "$sdk_ref"
+          sudo flatpak install -y --system flathub "${runtime}.Locale/${arch}/${runtime_version}" || true
+
+          flatpak_stage="$RUNNER_TEMP/flatpak-src"
+          flatpak_src="$RUNNER_TEMP/firefox.linux-x86_64.tar.xz"
+          rm -rf "$flatpak_stage"
+          mkdir -p "$flatpak_stage/firefox"
+          cp -a "$DIST_DIR"/. "$flatpak_stage/firefox"/
+          tar -cJf "$flatpak_src" -C "$flatpak_stage" firefox
+          flatpak_sha=$(sha256sum "$flatpak_src" | awk '{print $1}')
+
+          patched_manifest="$RUNNER_TEMP/firefox-flatpak.patched.yml"
+          sed \
+            -e "s|__FIREFOX_TAR_PATH__|$flatpak_src|g" \
+            -e "s|__FIREFOX_TAR_SHA256__|$flatpak_sha|g" \
+            "$manifest_template" > "$patched_manifest"
+
+          sudo flatpak-builder --state-dir="$FLATPAK_STATE_DIR" --install-deps-from=flathub --repo="$FLATPAK_REPO_DIR" --force-clean "$FLATPAK_BUILD_DIR" "$patched_manifest"
+          mkdir -p release
+          sudo flatpak build-bundle "$FLATPAK_REPO_DIR" release/firefox-patched.flatpak org.mozilla.firefoxpatch
+          sudo chown -R "$(id -u):$(id -g)" release || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firefox-patched
+          path: "release/*"
+
+      - name: Publish GitHub release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: firefox-build-${{ github.run_number }}
+          name: Firefox Build ${{ github.run_number }}
+          make_latest: false
+          generate_release_notes: true
+          files: |
+            release/*
