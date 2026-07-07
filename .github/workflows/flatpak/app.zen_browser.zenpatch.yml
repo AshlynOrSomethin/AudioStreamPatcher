@@ -9,6 +9,7 @@ add-extensions:
     directory: etc/zen
     no-autodownload: true
 command: launch-script.sh
+appstream-compose: false
 finish-args:
   - --allow=devel
   - --share=ipc
