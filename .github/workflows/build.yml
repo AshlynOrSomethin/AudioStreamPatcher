@@ -143,7 +143,6 @@ jobs:
           DIST_DIR="${{ steps.package.outputs.dist_dir }}"
           mkdir -p release
           cp zen-patched.tar.gz release/
-          tar --zstd -cf release/zen-patched-linux-x86_64.tar.zst -C "$DIST_DIR" .
 
           sudo apt-get update
           sudo apt-get install -y ruby ruby-dev build-essential rpm zstd
