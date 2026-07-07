@@ -195,10 +195,6 @@ jobs:
               > "$DESKTOP_FILE"
           fi
 
-              ROOT_DESKTOP="$APPDIR/zen.desktop"
-              cp "$DESKTOP_FILE" "$ROOT_DESKTOP"
-              sed -i -E 's/^Exec=.*/Exec=zen-patched/; s/^Icon=.*/Icon=zen/' "$ROOT_DESKTOP"
-
           app_exec=$(awk -F= '/^Exec=/{print $2; exit}' "$DESKTOP_FILE" | sed -E 's/[[:space:]]+%[A-Za-z]//g' | awk '{print $1}' || true)
           if [ -z "${app_exec:-}" ]; then
             for candidate in zen zen-bin firefox firefox-bin browser; do
@@ -219,8 +215,6 @@ jobs:
             exit 0
           fi
 
-          app_run_line="exec \"$APPDIR/$app_exec\" \"\$@\""
-
           mkdir -p "$APPDIR/usr/share/icons/hicolor/128x128/apps"
           icon_path=$(find "$APPDIR" -type f \( -name "*128*.png" -o -name "*256*.png" -o -name "*.png" \) | head -n 1 || true)
           if [ -n "${icon_path:-}" ]; then
@@ -232,10 +226,7 @@ jobs:
           cp "$DESKTOP_FILE" "$APPDIR/zen.desktop"
           sed -i -E 's/^Exec=.*/Exec=zen-patched/; s/^Icon=.*/Icon=zen/' "$APPDIR/zen.desktop"
 
-          printf '%s\n' \
-            '#!/bin/sh' \
-            "$app_run_line" \
-            > "$APPDIR/AppRun"
+          printf '#!/bin/sh\nexec "$APPDIR/%s" "$@"\n' "$app_exec" > "$APPDIR/AppRun"
           chmod +x "$APPDIR/AppRun"
 
           UPINFO="gh-releases-zsync|$GITHUB_REPOSITORY_OWNER|AudioStreamPatcher|latest|zen-patched-${ARCH}.AppImage.zsync"
@@ -264,7 +255,7 @@ jobs:
             exit 0
           fi
 
-          rm -rf "$FLATPAK_BUILD_DIR" "$FLATPAK_REPO_DIR" "$FLATPAK_STATE_DIR"
+          sudo rm -rf "$FLATPAK_BUILD_DIR" "$FLATPAK_REPO_DIR" "$FLATPAK_STATE_DIR"
           mkdir -p "$FLATPAK_BUILD_DIR" "$FLATPAK_REPO_DIR" "$FLATPAK_STATE_DIR"
 
           manifest_template=".github/workflows/flatpak/app.zen_browser.zenpatch.yml"
@@ -319,7 +310,7 @@ jobs:
 
           sudo flatpak-builder --state-dir="$FLATPAK_STATE_DIR" --install-deps-from=flathub --repo="$FLATPAK_REPO_DIR" --force-clean "$FLATPAK_BUILD_DIR" "$patched_manifest"
           mkdir -p release
-          sudo flatpak build-bundle "$FLATPAK_REPO_DIR" release/zen-patched.flatpak app.zen_browser.zen
+          sudo flatpak build-bundle "$FLATPAK_REPO_DIR" release/zen-patched.flatpak app.zen_browser.zenpatch
           sudo chown -R "$(id -u):$(id -g)" release || true
 
       - uses: actions/upload-artifact@v4
