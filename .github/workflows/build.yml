@@ -19,6 +19,22 @@ jobs:
         with:
           clean: false
 
+      - name: Clean previous build outputs
+        run: |
+          sudo rm -rf \
+            zen \
+            build \
+            release \
+            pkgroot \
+            appimage-input \
+            appimage-root \
+            appimagetool-x86_64.AppImage \
+            uruntime-appimage-squashfs-lite-x86_64 \
+            zen-patched.tar.gz \
+            .flatpak-builder \
+            flatpak-build \
+            flatpak-repo
+
       - name: Install system dependencies
         run: |
           if ! command -v apt-get >/dev/null 2>&1; then
