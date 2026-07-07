@@ -47,7 +47,7 @@ modules:
     buildsystem: simple
     build-commands:
       - mv zen /app/
-      - mkdir -p /app/etc/zen /tmp/zenpatch-meta
+      - mkdir -p /app/etc/zen
       - install -Dm0755 metadata/launch-script.sh ${FLATPAK_DEST}/bin/launch-script.sh
       - install -Dm0644 metadata/policies.json ${FLATPAK_DEST}/bin/distribution/policies.json
       - install -Dm0644 metadata/icons/app.zen_browser.zen.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/app.zen_browser.zenpatch.svg

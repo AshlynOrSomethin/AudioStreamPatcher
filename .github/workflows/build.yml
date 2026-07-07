@@ -229,8 +229,8 @@ jobs:
             ln -sf zen.png "$APPDIR/.DirIcon"
           fi
 
-          cp "$DESKTOP_FILE" "$APPDIR/zen-patched.desktop"
-          sed -i -E 's/^Exec=.*/Exec=zen-patched/; s/^Icon=.*/Icon=zen/' "$APPDIR/zen-patched.desktop"
+          cp "$DESKTOP_FILE" "$APPDIR/zen.desktop"
+          sed -i -E 's/^Exec=.*/Exec=zen-patched/; s/^Icon=.*/Icon=zen/' "$APPDIR/zen.desktop"
 
           printf '%s\n' \
             '#!/bin/sh' \
