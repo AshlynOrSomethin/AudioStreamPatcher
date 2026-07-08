@@ -68,6 +68,9 @@ jobs:
             libclang-dev \
             llvm \
             llvm-dev \
+            clang-14 \
+            llvm-14 \
+            libclang-14-dev \
             python3 \
             python3-pip \
             ccache \
@@ -82,9 +85,11 @@ jobs:
           fi
           . "$HOME/.cargo/env"
           rustup toolchain install stable --profile minimal
+          rustup toolchain install 1.90.0 --profile minimal || true
           rustup default stable
           rustup component add rustfmt
           cargo install cbindgen --version 0.29.1 --locked --force
+          echo "ESR_RUST_TOOLCHAIN=1.90.0" >> "$GITHUB_ENV"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Setup Node.js
@@ -111,6 +116,23 @@ jobs:
           mkdir -p firefox
           tar -xJf firefox-source.tar.xz -C firefox --strip-components=1
 
+      - name: Configure ESR-only toolchain (isolated)
+        run: |
+          set -euo pipefail
+
+          # Prefer Ubuntu 22.04-native LLVM/Clang for ESR bindgen stability.
+          if command -v clang-14 >/dev/null 2>&1; then
+            echo "CC=/usr/bin/clang-14" >> "$GITHUB_ENV"
+            echo "CXX=/usr/bin/clang++-14" >> "$GITHUB_ENV"
+            echo "AR=/usr/bin/llvm-ar-14" >> "$GITHUB_ENV"
+            echo "NM=/usr/bin/llvm-nm-14" >> "$GITHUB_ENV"
+          fi
+
+          if [ -d /usr/lib/llvm-14/lib ]; then
+            echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
+            echo "LD_LIBRARY_PATH=/usr/lib/llvm-14/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          fi
+
       - name: Apply patch
         run: |
           cd firefox
@@ -120,7 +142,7 @@ jobs:
 
             # ESR occasionally reorders top-of-file includes, which can make the
             # include hunk fail while the functional hunks still apply.
-            if grep -q 'Hunk #1 FAILED at 9\.' "$patch_log"; then
+            if grep -Eq 'Hunk #1 FAILED at [0-9]+\.' "$patch_log"; then
               cpp="dom/media/AudioStream.cpp"
               if ! grep -q '#include "AudioSampleFormat.h"' "$cpp"; then
                 awk '
@@ -157,6 +179,12 @@ jobs:
       - name: Build
         run: |
           cd firefox
+
+          # Override Rust only for this checkout; does not affect other workflows.
+          if [ -n "${ESR_RUST_TOOLCHAIN:-}" ]; then
+            rustup override set "$ESR_RUST_TOOLCHAIN"
+          fi
+
           ./mach build
 
       - name: Package artifact

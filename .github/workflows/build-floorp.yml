@@ -1,0 +1,374 @@
+name: Build Floorp with patch
+
+permissions:
+  contents: write
+
+on:
+  workflow_call:
+    inputs:
+      publish_release:
+        description: Publish a GitHub release from this workflow run
+        required: false
+        type: boolean
+        default: true
+      floorp_ref:
+        description: Floorp git ref (tag/branch/commit). Empty resolves latest release tag.
+        required: false
+        type: string
+        default: ""
+      runtime_ref:
+        description: Floorp-runtime git ref. Empty tries floorp_ref, then falls back to main.
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish a GitHub release from this workflow run
+        required: false
+        default: true
+        type: boolean
+      floorp_ref:
+        description: Floorp git ref (tag/branch/commit). Empty resolves latest release tag.
+        required: false
+        default: ""
+        type: string
+      runtime_ref:
+        description: Floorp-runtime git ref. Empty tries floorp_ref, then falls back to main.
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  build:
+    runs-on: [self-hosted, Linux, X64]
+    env:
+      GITHUB_TOKEN: ${{ secrets.FLOORP_GH_TOKEN != '' && secrets.FLOORP_GH_TOKEN || github.token }}
+      GH_TOKEN: ${{ secrets.FLOORP_GH_TOKEN != '' && secrets.FLOORP_GH_TOKEN || github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Resolve Floorp/runtime refs
+        id: refs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          floorp_ref="${{ inputs.floorp_ref }}"
+          runtime_ref="${{ inputs.runtime_ref }}"
+
+          if [ -z "$floorp_ref" ]; then
+            floorp_ref="$(git ls-remote --tags --refs https://github.com/Floorp-Projects/Floorp.git 'refs/tags/v*' | awk -F/ '{print $3}' | sort -V | tail -n1)"
+          fi
+
+          if [ -z "$floorp_ref" ]; then
+            echo "Unable to resolve Floorp ref"
+            exit 1
+          fi
+
+          if [ -z "$runtime_ref" ]; then
+            if git ls-remote --exit-code --tags https://github.com/Floorp-Projects/Floorp-runtime.git "refs/tags/$floorp_ref" >/dev/null 2>&1; then
+              runtime_ref="$floorp_ref"
+            elif git ls-remote --exit-code --heads https://github.com/Floorp-Projects/Floorp-runtime.git "refs/heads/$floorp_ref" >/dev/null 2>&1; then
+              runtime_ref="$floorp_ref"
+            else
+              runtime_ref="main"
+            fi
+          fi
+
+          echo "Resolved floorp_ref=$floorp_ref runtime_ref=$runtime_ref"
+          echo "floorp_ref=$floorp_ref" >> "$GITHUB_OUTPUT"
+          echo "runtime_ref=$runtime_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout Floorp runtime source
+        uses: actions/checkout@v4
+        with:
+          repository: Floorp-Projects/Floorp-runtime
+          ref: ${{ steps.refs.outputs.runtime_ref }}
+          path: runtime
+          submodules: recursive
+
+      - name: Checkout Floorp source
+        uses: actions/checkout@v4
+        with:
+          repository: Floorp-Projects/Floorp
+          ref: ${{ steps.refs.outputs.floorp_ref }}
+          path: noraneko
+
+      - name: Clean previous build outputs
+        run: |
+          sudo rm -rf \
+            runtime/obj-artifact-build-output \
+            runtime/release \
+            runtime/artifacts \
+            release
+
+      - name: Install system dependencies
+        run: |
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "This workflow requires Ubuntu (apt-get not found)."
+            exit 1
+          fi
+          sudo apt-get update
+          sudo apt-get install -y \
+            msitools \
+            jq \
+            curl \
+            rsync \
+            python3 \
+            unzip \
+            zip \
+            build-essential \
+            patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Setup Floorp (noraneko)
+        run: |
+          set -euo pipefail
+          cd noraneko
+          printf 'GITHUB_TOKEN=%s\n' "$GITHUB_TOKEN" > .env
+          deno install --allow-scripts
+
+      - name: Apply software-volume patch to runtime source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd runtime
+
+          if [ ! -f dom/media/AudioStream.cpp ] || [ ! -f dom/media/AudioStream.h ]; then
+            echo "Runtime source does not contain expected AudioStream files"
+            exit 1
+          fi
+
+          patch_log="$(mktemp)"
+          if ! patch -p1 < "$GITHUB_WORKSPACE/.github/workflows/patches/software-volume.patch" >"$patch_log" 2>&1; then
+            cat "$patch_log"
+
+            # Include ordering occasionally drifts; recover known non-functional hunk mismatch.
+            if grep -q 'Hunk #1 FAILED at 9\.' "$patch_log"; then
+              cpp="dom/media/AudioStream.cpp"
+              if ! grep -q '#include "AudioSampleFormat.h"' "$cpp"; then
+                awk '
+                  { print }
+                  /#include "AudioConverter.h"/ {
+                    print "#include \"AudioSampleFormat.h\""
+                  }
+                ' "$cpp" > "$cpp.tmp"
+                mv "$cpp.tmp" "$cpp"
+              fi
+            else
+              echo "Patch failed with an unexpected error"
+              exit 1
+            fi
+          fi
+
+          grep -Eq 'mSoftwareVolume[[:space:]]*=[[:space:]]*static_cast<float>\(aVolume \* CubebUtils::GetVolumeScale\(\)\)' dom/media/AudioStream.cpp
+          grep -Eq 'AudioBufferInPlaceScale\(static_cast<AudioDataValue\*>\(aBuffer\), volume,' dom/media/AudioStream.cpp
+          grep -Eq 'std::atomic<float>[[:space:]]+mSoftwareVolume\{1\.0f\};' dom/media/AudioStream.h
+
+      - name: Bootstrap build environment
+        run: |
+          set -euo pipefail
+          cd runtime
+          ./mach --no-interactive bootstrap --application-choice browser_artifact_mode
+
+      - name: Write Floorp versions
+        run: |
+          set -euo pipefail
+          cd noraneko
+          deno task feles-build misc writeVersion
+
+      - name: Configure runtime for Linux artifact build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd runtime
+
+          MOZCONFIG="./.github/workflows/mozconfigs/linux-x86_64.mozconfig"
+          if [ ! -f "$MOZCONFIG" ]; then
+            MOZCONFIG="./.github/workflows/mozconfigs/linux64.mozconfig"
+          fi
+          if [ ! -f "$MOZCONFIG" ]; then
+            echo "Linux mozconfig not found in runtime repository"
+            exit 1
+          fi
+
+          cp "$MOZCONFIG" mozconfig
+
+          if [ -d "./.github/assets/branding" ]; then
+            cp -r ./.github/assets/branding/* ./browser/branding/
+          fi
+          if [ -d "$GITHUB_WORKSPACE/noraneko/static/gecko/branding" ]; then
+            cp -r "$GITHUB_WORKSPACE/noraneko/static/gecko/branding"/* ./browser/branding/
+          fi
+
+          AUTOGEN_DIR="$GITHUB_WORKSPACE/noraneko/static/gecko/config/autogenerated"
+          mkdir -p "$AUTOGEN_DIR"
+          echo "$(cat "$GITHUB_WORKSPACE/noraneko/static/gecko/config/version.txt")@$(cat ./browser/config/version.txt)" > "$AUTOGEN_DIR/version.txt"
+          echo "$(cat "$GITHUB_WORKSPACE/noraneko/static/gecko/config/version_display.txt")@$(cat ./browser/config/version_display.txt)" > "$AUTOGEN_DIR/version_display.txt"
+
+          cat >> mozconfig <<'EOF'
+          ac_add_options --with-version-file-path=noraneko/static/gecko/config/autogenerated
+          ac_add_options --enable-release
+          ac_add_options --disable-tests
+          ac_add_options --enable-artifact-builds
+          mk_add_options MOZ_OBJDIR=./obj-artifact-build-output
+          EOF
+
+          ./mach configure
+
+      - name: Build Floorp frontend artifacts (before-mach)
+        run: |
+          set -euo pipefail
+          cd noraneko
+          NODE_ENV='production' deno task feles-build build --phase before-mach
+
+      - name: Download runtime artifact tarball
+        id: runtime_artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/artifacts"
+
+          ref="${{ steps.refs.outputs.runtime_ref }}"
+          names=(
+            "floorp-linux-x86_64-moz-artifact.tar.xz"
+            "noraneko-linux-x86_64-moz-artifact.tar.xz"
+          )
+
+          found=""
+          for name in "${names[@]}"; do
+            tag_url="https://github.com/Floorp-Projects/Floorp-runtime/releases/download/${ref}/${name}"
+            latest_url="https://github.com/Floorp-Projects/Floorp-runtime/releases/latest/download/${name}"
+            if curl -fL "$tag_url" -o "$HOME/artifacts/$name"; then
+              found="$HOME/artifacts/$name"
+              break
+            fi
+            if curl -fL "$latest_url" -o "$HOME/artifacts/$name"; then
+              found="$HOME/artifacts/$name"
+              break
+            fi
+          done
+
+          if [ -z "$found" ]; then
+            echo "Unable to download Floorp runtime artifact tarball"
+            exit 1
+          fi
+
+          echo "artifact_path=$found" >> "$GITHUB_OUTPUT"
+
+      - name: Build runtime with downloaded artifact
+        run: |
+          set -euo pipefail
+          cd runtime
+          MOZ_ARTIFACT_FILE="${{ steps.runtime_artifact.outputs.artifact_path }}" ./mach build
+
+      - name: Inject Floorp changes (after-mach)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DIST_ROOT="$GITHUB_WORKSPACE/runtime/obj-artifact-build-output/dist"
+          PATCH_TARGET="$DIST_ROOT/bin"
+          BUILDID2_SRC="$GITHUB_WORKSPACE/noraneko/_dist/buildid2"
+
+          copy_buildid2() {
+            local dest_root="$1"
+            if [ ! -f "$BUILDID2_SRC" ] || [ ! -d "$dest_root" ]; then
+              return 0
+            fi
+            mkdir -p "$dest_root/browser"
+            cp "$BUILDID2_SRC" "$dest_root/browser/buildid2"
+          }
+
+          cd "$GITHUB_WORKSPACE/noraneko"
+          deno task feles-build build --phase after-mach
+
+          rsync -aL "$PATCH_TARGET/" "$DIST_ROOT/tmp__bin"
+          rm -rf "$PATCH_TARGET"
+          mv "$DIST_ROOT/tmp__bin" "$PATCH_TARGET"
+
+          git apply --reject ./tools/patches/*.patch --directory "$PATCH_TARGET" --unsafe-paths --check --apply
+          copy_buildid2 "$PATCH_TARGET"
+          for candidate in "$DIST_ROOT/floorp" "$DIST_ROOT/noraneko"; do
+            copy_buildid2 "$candidate"
+          done
+
+      - name: Apply Firefox preference overrides
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd noraneko
+
+          CANDIDATES=(
+            "../runtime/obj-artifact-build-output/dist/bin/browser/defaults/preferences/firefox.js"
+            "../runtime/obj-artifact-build-output/dist/noraneko/browser/defaults/preferences/firefox.js"
+            "../runtime/obj-artifact-build-output/dist/floorp/browser/defaults/preferences/firefox.js"
+          )
+
+          FIREFOX_JS_PATH=""
+          for candidate in "${CANDIDATES[@]}"; do
+            if [ -f "$candidate" ]; then
+              FIREFOX_JS_PATH="$candidate"
+              break
+            fi
+          done
+
+          if [ -n "$FIREFOX_JS_PATH" ]; then
+            ./static/gecko/pref/override.sh "$FIREFOX_JS_PATH"
+          else
+            echo "Warning: firefox.js not found in expected locations"
+          fi
+
+      - name: Package Floorp
+        run: |
+          set -euo pipefail
+          cd runtime
+          ./mach package
+
+      - name: Collect release artifacts
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(cat noraneko/static/gecko/config/version.txt | tr -d '\n\r')"
+          floorp_ref="${{ steps.refs.outputs.floorp_ref }}"
+
+          archive="$(find runtime/obj-artifact-build-output/dist -maxdepth 3 -type f \( -name 'floorp*tar.xz' -o -name 'noraneko*tar.xz' \) | head -n1)"
+          if [ -z "$archive" ]; then
+            echo "No Floorp package archive found under runtime/obj-artifact-build-output/dist"
+            exit 1
+          fi
+
+          mkdir -p release
+          output_name="floorp-patched-${version}-${floorp_ref}-linux-x86_64.tar.xz"
+          cp "$archive" "release/$output_name"
+
+          echo "app_version=$version" >> "$GITHUB_OUTPUT"
+          echo "artifact_basename=${output_name%.tar.xz}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: floorp-patched-${{ steps.package.outputs.app_version }}
+          path: release/*
+
+      - name: Publish GitHub release
+        if: success() && github.event_name == 'workflow_call' && inputs.publish_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: floorp-build-${{ github.run_number }}
+          name: Floorp Build ${{ github.run_number }}
+          make_latest: false
+          generate_release_notes: true
+          files: |
+            release/*
