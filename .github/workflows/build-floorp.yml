@@ -204,6 +204,14 @@ jobs:
 
           cp "$MOZCONFIG" mozconfig
 
+          # Artifact builds are incompatible with some updater/release flags from
+          # runtime mozconfigs. Strip them before appending our CI options.
+          sed -i 's|^[[:space:]]*ac_add_options --disable-updater.*$||g' mozconfig
+          sed -i 's|^[[:space:]]*ac_add_options --enable-unverified-updates.*$||g' mozconfig
+          sed -i 's|^[[:space:]]*ac_add_options --enable-chrome-format=flat.*$||g' mozconfig
+          sed -i 's|^[[:space:]]*ac_add_options --enable-update-channel=.*$||g' mozconfig
+          sed -i 's|^[[:space:]]*ac_add_options --with-branding=.*$||g' mozconfig
+
           if [ -d "./.github/assets/branding" ]; then
             cp -r ./.github/assets/branding/* ./browser/branding/
           fi
