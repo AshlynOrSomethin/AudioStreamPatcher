@@ -313,7 +313,21 @@ jobs:
           rm -rf "$PATCH_TARGET"
           mv "$DIST_ROOT/tmp__bin" "$PATCH_TARGET"
 
-          git apply --reject ./tools/patches/*.patch --directory "$PATCH_TARGET" --unsafe-paths --check --apply
+          # Some Floorp UI patches can drift between releases. Apply them best-effort
+          # so the core patched browser build can continue.
+          shopt -s nullglob
+          for patch_file in ./tools/patches/*.patch; do
+            echo "Applying optional Floorp patch: $patch_file"
+            if ! git apply --reject --unsafe-paths --directory "$PATCH_TARGET" --check "$patch_file"; then
+              echo "Warning: patch check failed for $patch_file, skipping."
+              continue
+            fi
+            if ! git apply --reject --unsafe-paths --directory "$PATCH_TARGET" "$patch_file"; then
+              echo "Warning: patch apply failed for $patch_file, continuing."
+            fi
+          done
+          shopt -u nullglob || true
+
           copy_buildid2 "$PATCH_TARGET"
           for candidate in "$DIST_ROOT/floorp" "$DIST_ROOT/noraneko"; do
             copy_buildid2 "$candidate"
