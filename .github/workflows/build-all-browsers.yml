@@ -71,7 +71,7 @@ jobs:
             release/**/*
 
       - name: Dispatch downstream workflow (optional)
-        if: ${{ success() && secrets.CROSS_REPO_DISPATCH_TOKEN != '' && vars.CROSS_REPO_OWNER != '' && vars.CROSS_REPO_NAME != '' && vars.CROSS_REPO_WORKFLOW_FILE != '' }}
+        if: ${{ success() }}
         env:
           TOKEN: ${{ secrets.CROSS_REPO_DISPATCH_TOKEN }}
           TARGET_OWNER: ${{ vars.CROSS_REPO_OWNER }}
@@ -84,6 +84,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          if [ -z "${TOKEN:-}" ] || [ -z "${TARGET_OWNER:-}" ] || [ -z "${TARGET_REPO:-}" ] || [ -z "${TARGET_WORKFLOW:-}" ]; then
+            echo "Skipping downstream dispatch: missing token or target repo/workflow vars."
+            exit 0
+          fi
 
           ref="${TARGET_REF:-main}"
           payload="$(cat <<EOF
