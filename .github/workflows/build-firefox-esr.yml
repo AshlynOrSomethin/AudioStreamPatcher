@@ -12,8 +12,6 @@ on:
         type: boolean
         default: true
   workflow_dispatch:
-  schedule:
-    - cron: "30 3 * * *"
 
 jobs:
   build:
