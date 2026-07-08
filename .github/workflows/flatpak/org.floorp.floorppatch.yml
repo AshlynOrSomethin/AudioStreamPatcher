@@ -1,0 +1,119 @@
+app-id: org.floorp.floorppatch
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+base: org.mozilla.firefox.BaseApp
+base-version: '25.08'
+command: launch-script.sh
+appstream-compose: false
+finish-args:
+  - --allow=devel
+  - --share=ipc
+  - --share=network
+  - --socket=pulseaudio
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pcsc
+  - --socket=cups
+  - --persist=.floorp
+  - --env=DICPATH=/usr/share/hunspell
+  - --filesystem=xdg-download:rw
+  - --filesystem=/run/.heim_org.h5l.kcm-socket
+  - --filesystem=xdg-run/speech-dispatcher:ro
+  - --device=all
+  - --talk-name=org.freedesktop.FileManager1
+  - --system-talk-name=org.freedesktop.NetworkManager
+  - --talk-name=org.a11y.Bus
+  - --talk-name=org.gtk.vfs.*
+  - --own-name=org.mpris.MediaPlayer2.floorp.*
+  - --own-name=org.floorp.floorppatch.*
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/pkgconfig
+  - /share/aclocal
+  - /share/gtk-doc
+  - /share/doc
+  - /share/info
+  - /man
+  - /share/man
+  - '*.la'
+  - '*.a'
+modules:
+  - name: floorp
+    buildsystem: simple
+    build-commands:
+      - mv firefox /app/
+      - mkdir -p /app/etc/floorp
+      - |
+        set -euo pipefail
+        if [ -x /app/firefox/bin/firefox ] && [ ! -e /app/firefox/firefox ]; then
+          ln -s bin/firefox /app/firefox/firefox
+        fi
+        if [ -x /app/firefox/bin/firefox-bin ] && [ ! -e /app/firefox/firefox-bin ]; then
+          ln -s bin/firefox-bin /app/firefox/firefox-bin
+        fi
+      - |
+        set -euo pipefail
+        tmpdir="$(mktemp -d)"
+        cat > "$tmpdir/launch-script.sh" <<'EOF'
+        #!/bin/sh
+        set -eu
+        exec /app/firefox/firefox "$@"
+        EOF
+        install -Dm0755 "$tmpdir/launch-script.sh" ${FLATPAK_DEST}/bin/launch-script.sh
+      - |
+        set -euo pipefail
+        tmpdir="$(mktemp -d)"
+        cat > "$tmpdir/distribution.ini" <<'EOF'
+        [Global]
+        id=org.floorp.floorppatch
+        version=1.0
+
+        [Preferences]
+        app.update.enabled=false
+        EOF
+        install -Dm0644 "$tmpdir/distribution.ini" ${FLATPAK_DEST}/bin/distribution/distribution.ini
+      - |
+        set -euo pipefail
+        icon_src="$(find /app/firefox -type f \( -name 'default128.png' -o -name '*128*.png' -o -name '*.png' \) | head -n 1 || true)"
+        if [ -n "${icon_src:-}" ]; then
+          install -Dm0644 "$icon_src" ${FLATPAK_DEST}/share/icons/hicolor/128x128/apps/org.floorp.floorppatch.png
+        fi
+      - |
+        set -euo pipefail
+        tmpdir="$(mktemp -d)"
+        cat > "$tmpdir/org.floorp.floorppatch.desktop" <<'EOF'
+        [Desktop Entry]
+        Name=Floorp Patched
+        Exec=launch-script.sh %u
+        Icon=org.floorp.floorppatch
+        Terminal=false
+        Type=Application
+        Categories=Network;WebBrowser;
+        MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+        StartupNotify=true
+        EOF
+        install -Dm0644 "$tmpdir/org.floorp.floorppatch.desktop" ${FLATPAK_DEST}/share/applications/org.floorp.floorppatch.desktop
+        cat > "$tmpdir/org.floorp.floorppatch.metainfo.xml" <<'EOF'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <component type="desktop-application">
+          <id>org.floorp.floorppatch</id>
+          <name>Floorp Patched</name>
+          <summary>Floorp build with AudioStream patch</summary>
+          <metadata_license>CC0-1.0</metadata_license>
+          <project_license>MPL-2.0</project_license>
+          <launchable type="desktop-id">org.floorp.floorppatch.desktop</launchable>
+          <provides>
+            <binary>firefox</binary>
+          </provides>
+        </component>
+        EOF
+        install -Dm0644 "$tmpdir/org.floorp.floorppatch.metainfo.xml" ${FLATPAK_DEST}/share/metainfo/org.floorp.floorppatch.metainfo.xml
+    sources:
+      - type: archive
+        path: __FIREFOX_TAR_PATH__
+        sha256: __FIREFOX_TAR_SHA256__
+        strip-components: 0
+        only-arches:
+          - x86_64

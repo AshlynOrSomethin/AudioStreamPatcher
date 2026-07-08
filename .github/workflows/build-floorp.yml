@@ -103,7 +103,11 @@ jobs:
             runtime/obj-artifact-build-output \
             runtime/release \
             runtime/artifacts \
-            release
+            release \
+            pkgroot \
+            build \
+            appimagetool-x86_64.AppImage \
+            uruntime-appimage-squashfs-lite-x86_64
 
       - name: Install system dependencies
         run: |
@@ -365,7 +369,7 @@ jobs:
           cd runtime
           ./mach package
 
-      - name: Collect release artifacts
+      - name: Prepare Floorp dist payload
         id: package
         shell: bash
         run: |
@@ -374,18 +378,212 @@ jobs:
           version="$(cat noraneko/static/gecko/config/version.txt | tr -d '\n\r')"
           floorp_ref="${{ steps.refs.outputs.floorp_ref }}"
 
-          archive="$(find runtime/obj-artifact-build-output/dist -maxdepth 3 -type f \( -name 'floorp*tar.xz' -o -name 'noraneko*tar.xz' \) | head -n1)"
-          if [ -z "$archive" ]; then
-            echo "No Floorp package archive found under runtime/obj-artifact-build-output/dist"
+          dist_bin="runtime/obj-artifact-build-output/dist/bin"
+          if [ ! -d "$dist_bin" ]; then
+            echo "No Floorp dist/bin directory found under runtime/obj-artifact-build-output/dist"
             exit 1
           fi
 
-          mkdir -p release
-          output_name="floorp-patched-${version}-${floorp_ref}-linux-x86_64.tar.xz"
-          cp "$archive" "release/$output_name"
+          portable_dir="$RUNNER_TEMP/floorp-dist-portable"
+          rm -rf "$portable_dir"
+          mkdir -p "$portable_dir"
+          cp -aL "$dist_bin"/. "$portable_dir"/
 
+          artifact_basename="floorp-patched-${version}-${floorp_ref}"
+
+          echo "dist_dir=$portable_dir" >> "$GITHUB_OUTPUT"
           echo "app_version=$version" >> "$GITHUB_OUTPUT"
-          echo "artifact_basename=${output_name%.tar.xz}" >> "$GITHUB_OUTPUT"
+          echo "artifact_basename=$artifact_basename" >> "$GITHUB_OUTPUT"
+
+      - name: Build distributable packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.package.outputs.app_version }}"
+          ARTIFACT_BASENAME="${{ steps.package.outputs.artifact_basename }}"
+          DIST_DIR="${{ steps.package.outputs.dist_dir }}"
+
+          mkdir -p release
+          tar -cJf "release/${ARTIFACT_BASENAME}-linux-x86_64.tar.xz" -C "$DIST_DIR" .
+
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev build-essential rpm zstd libarchive-tools
+          sudo gem install --no-document fpm
+
+          rm -rf pkgroot
+          mkdir -p pkgroot/usr/lib/floorp-patched pkgroot/usr/bin
+          cp -a "$DIST_DIR"/. pkgroot/usr/lib/floorp-patched/
+
+          if [ -e pkgroot/usr/lib/floorp-patched/firefox ]; then
+            ln -s ../lib/floorp-patched/firefox pkgroot/usr/bin/floorp
+          elif [ -e pkgroot/usr/lib/floorp-patched/bin/firefox ]; then
+            ln -s ../lib/floorp-patched/bin/firefox pkgroot/usr/bin/floorp
+          fi
+
+          if [ -e pkgroot/usr/lib/floorp-patched/firefox-bin ]; then
+            ln -s ../lib/floorp-patched/firefox-bin pkgroot/usr/bin/floorp-bin
+          elif [ -e pkgroot/usr/lib/floorp-patched/bin/firefox-bin ]; then
+            ln -s ../lib/floorp-patched/bin/firefox-bin pkgroot/usr/bin/floorp-bin
+          fi
+
+          fpm -s dir -t deb -n floorp-patched -v "$VERSION" -C pkgroot -p "release/${ARTIFACT_BASENAME}-amd64.deb" usr
+          fpm -s dir -t rpm -n floorp-patched -v "$VERSION" -C pkgroot -p "release/${ARTIFACT_BASENAME}-x86_64.rpm" usr
+          fpm -s dir -t pacman -n floorp-patched -v "$VERSION" -C pkgroot -p "release/${ARTIFACT_BASENAME}-x86_64.pkg.tar.zst" usr
+
+      - name: Build AppImage (best effort)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCH="x86_64"
+          APPDIR="build/AppDir"
+          DIST_DIR="${{ steps.package.outputs.dist_dir }}"
+          ARTIFACT_BASENAME="${{ steps.package.outputs.artifact_basename }}"
+          APPIMAGE_NAME="${ARTIFACT_BASENAME}-${ARCH}.AppImage"
+          APPIMAGE_ZSYNC_NAME="${APPIMAGE_NAME}.zsync"
+
+          sudo apt-get update
+          sudo apt-get install -y desktop-file-utils appstream file
+          if ! sudo apt-get install -y libfuse2; then
+            sudo apt-get install -y libfuse2t64
+          fi
+
+          rm -rf "$APPDIR"
+          mkdir -p "$APPDIR" release
+          cp -a "$DIST_DIR"/. "$APPDIR"/
+
+          DESKTOP_FILE="$(find "$APPDIR" -maxdepth 3 -type f -name "*.desktop" | head -n 1 || true)"
+          if [ -z "${DESKTOP_FILE:-}" ]; then
+            mkdir -p "$APPDIR/usr/share/applications"
+            DESKTOP_FILE="$APPDIR/usr/share/applications/floorp-patched.desktop"
+            printf '%s\n' \
+              '[Desktop Entry]' \
+              'Type=Application' \
+              'Name=Floorp Patched' \
+              'Exec=floorp' \
+              'Icon=floorp' \
+              'Categories=Network;WebBrowser;' \
+              > "$DESKTOP_FILE"
+          fi
+
+          app_exec=""
+          for candidate in firefox floorp firefox-bin bin/firefox bin/floorp bin/firefox-bin; do
+            if [ -x "$APPDIR/$candidate" ]; then
+              app_exec="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "${app_exec:-}" ]; then
+            app_exec=$(find "$APPDIR/bin" -maxdepth 1 -type f -executable 2>/dev/null | head -n 1 | sed "s|$APPDIR/||" || true)
+          fi
+
+          if [ -z "${app_exec:-}" ]; then
+            echo "AppImage: could not find executable in $APPDIR"
+            ls -lah "$APPDIR" || true
+            exit 0
+          fi
+
+          mkdir -p "$APPDIR/usr/share/icons/hicolor/128x128/apps"
+          icon_path=$(find "$APPDIR" -type f \( -name '*128*.png' -o -name '*256*.png' -o -name '*.png' \) | head -n 1 || true)
+          if [ -n "${icon_path:-}" ]; then
+            cp "$icon_path" "$APPDIR/usr/share/icons/hicolor/128x128/apps/floorp.png"
+            cp "$icon_path" "$APPDIR/floorp.png"
+            ln -sf floorp.png "$APPDIR/.DirIcon"
+          fi
+
+          cp "$DESKTOP_FILE" "$APPDIR/floorp.desktop"
+          sed -i -E 's/^Exec=.*/Exec=floorp-patched/; s/^Icon=.*/Icon=floorp/' "$APPDIR/floorp.desktop"
+
+          printf '#!/bin/sh\nexec "$APPDIR/%s" "$@"\n' "$app_exec" > "$APPDIR/AppRun"
+          chmod +x "$APPDIR/AppRun"
+
+          UPINFO="gh-releases-zsync|$GITHUB_REPOSITORY_OWNER|AudioStreamPatcher|latest|${APPIMAGE_ZSYNC_NAME}"
+          wget "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O appimagetool-x86_64.AppImage
+          wget "https://github.com/VHSgunzo/uruntime/releases/latest/download/uruntime-appimage-squashfs-lite-$ARCH" -O "uruntime-appimage-squashfs-lite-$ARCH"
+          chmod +x appimagetool-x86_64.AppImage "uruntime-appimage-squashfs-lite-$ARCH"
+          sed -i 's|URUNTIME_MOUNT=[0-9]|URUNTIME_MOUNT=0|' "uruntime-appimage-squashfs-lite-$ARCH" || true
+
+          ./appimagetool-x86_64.AppImage -u "$UPINFO" "$APPDIR" "$APPIMAGE_NAME" --runtime-file "./uruntime-appimage-squashfs-lite-$ARCH"
+          mv -f "$APPIMAGE_NAME" release/
+          if [ -f "$APPIMAGE_ZSYNC_NAME" ]; then
+            mv -f "$APPIMAGE_ZSYNC_NAME" release/
+          fi
+
+      - name: Build Flatpak bundle (best effort)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIST_DIR="${{ steps.package.outputs.dist_dir }}"
+          ARTIFACT_BASENAME="${{ steps.package.outputs.artifact_basename }}"
+          FLATPAK_BUILD_DIR="$RUNNER_TEMP/flatpak-build"
+          FLATPAK_REPO_DIR="$RUNNER_TEMP/flatpak-repo"
+          FLATPAK_STATE_DIR="$RUNNER_TEMP/flatpak-state"
+
+          if [ ! -d "${DIST_DIR:-}" ]; then
+            echo "Missing DIST_DIR from build output. Skipping Flatpak bundle."
+            exit 0
+          fi
+
+          sudo rm -rf "$FLATPAK_BUILD_DIR" "$FLATPAK_REPO_DIR" "$FLATPAK_STATE_DIR"
+          mkdir -p "$FLATPAK_BUILD_DIR" "$FLATPAK_REPO_DIR" "$FLATPAK_STATE_DIR"
+
+          manifest_template=".github/workflows/flatpak/org.floorp.floorppatch.yml"
+          if [ ! -f "$manifest_template" ]; then
+            echo "Missing Flatpak manifest template: $manifest_template"
+            exit 1
+          fi
+
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder appstream-compose
+
+          if ! sudo flatpak remotes --system --columns=name | grep -qx flathub; then
+            sudo flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          fi
+
+          runtime=$(awk -F': *' '/^[[:space:]]*runtime:[[:space:]]*/ {v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^["'"'"']|["'"'"']$/, "", v); print v; exit}' "$manifest_template")
+          sdk=$(awk -F': *' '/^[[:space:]]*sdk:[[:space:]]*/ {v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^["'"'"']|["'"'"']$/, "", v); print v; exit}' "$manifest_template")
+          runtime_version=$(awk -F': *' '/^[[:space:]]*runtime-version:[[:space:]]*/ {v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^["'"'"']|["'"'"']$/, "", v); print v; exit}' "$manifest_template")
+
+          arch="x86_64"
+          echo "Flatpak manifest runtime=${runtime:-<empty>} sdk=${sdk:-<empty>} runtime-version=${runtime_version:-<empty>} arch=$arch"
+
+          if [ -z "${runtime:-}" ] || [ -z "${sdk:-}" ] || [ -z "${runtime_version:-}" ]; then
+            echo "Manifest is missing runtime/sdk/runtime-version. Cannot preinstall Flatpak deps."
+            exit 1
+          fi
+
+          runtime_ref="${runtime}/${arch}/${runtime_version}"
+          sdk_ref="${sdk}/${arch}/${runtime_version}"
+
+          sudo flatpak install -y --system flathub "$runtime_ref" "$sdk_ref"
+          sudo flatpak install -y --system flathub "${runtime}.Locale/${arch}/${runtime_version}" || true
+
+          sudo flatpak info --system "$runtime_ref"
+          sudo flatpak info --system "$sdk_ref"
+
+          flatpak_stage="$RUNNER_TEMP/flatpak-src"
+          flatpak_src="$RUNNER_TEMP/floorp.linux-x86_64.tar.xz"
+          rm -rf "$flatpak_stage"
+          mkdir -p "$flatpak_stage/firefox"
+          cp -a "$DIST_DIR"/. "$flatpak_stage/firefox"/
+          tar -cJf "$flatpak_src" -C "$flatpak_stage" firefox
+          flatpak_sha=$(sha256sum "$flatpak_src" | awk '{print $1}')
+
+          patched_manifest="$RUNNER_TEMP/floorp-flatpak.patched.yml"
+          sed \
+            -e "s|__FIREFOX_TAR_PATH__|$flatpak_src|g" \
+            -e "s|__FIREFOX_TAR_SHA256__|$flatpak_sha|g" \
+            "$manifest_template" > "$patched_manifest"
+
+          echo "Using patched Flatpak manifest with local source: $patched_manifest"
+
+          sudo flatpak-builder --state-dir="$FLATPAK_STATE_DIR" --install-deps-from=flathub --repo="$FLATPAK_REPO_DIR" --force-clean "$FLATPAK_BUILD_DIR" "$patched_manifest"
+          mkdir -p release
+          sudo flatpak build-bundle "$FLATPAK_REPO_DIR" "release/${ARTIFACT_BASENAME}.flatpak" org.floorp.floorppatch
+          sudo chown -R "$(id -u):$(id -g)" release || true
 
       - uses: actions/upload-artifact@v4
         with:
