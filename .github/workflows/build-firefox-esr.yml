@@ -122,7 +122,33 @@ jobs:
       - name: Apply patch
         run: |
           cd firefox
-          patch -p1 < ../.github/workflows/patches/software-volume.patch
+          patch_log="$(mktemp)"
+          if ! patch -p1 < ../.github/workflows/patches/software-volume.patch >"$patch_log" 2>&1; then
+            cat "$patch_log"
+
+            # ESR occasionally reorders top-of-file includes, which can make the
+            # include hunk fail while the functional hunks still apply.
+            if grep -q 'Hunk #1 FAILED at 9\.' "$patch_log"; then
+              cpp="dom/media/AudioStream.cpp"
+              if ! grep -q '#include "AudioSampleFormat.h"' "$cpp"; then
+                awk '
+                  { print }
+                  /#include "AudioConverter.h"/ {
+                    print "#include \"AudioSampleFormat.h\""
+                  }
+                ' "$cpp" > "$cpp.tmp"
+                mv "$cpp.tmp" "$cpp"
+              fi
+            else
+              echo "Patch failed with an unexpected error; aborting."
+              exit 1
+            fi
+          fi
+
+          # Ensure all expected software-volume changes are present.
+          grep -Eq 'mSoftwareVolume[[:space:]]*=[[:space:]]*static_cast<float>\(aVolume \* CubebUtils::GetVolumeScale\(\)\)' dom/media/AudioStream.cpp
+          grep -Eq 'AudioBufferInPlaceScale\(static_cast<AudioDataValue\*>\(aBuffer\), volume,' dom/media/AudioStream.cpp
+          grep -Eq 'std::atomic<float>[[:space:]]+mSoftwareVolume\{1\.0f\};' dom/media/AudioStream.h
 
       - name: Configure mozconfig for CI
         run: |
