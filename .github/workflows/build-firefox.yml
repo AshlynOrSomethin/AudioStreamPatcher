@@ -11,14 +11,6 @@ on:
         required: false
         type: boolean
         default: true
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/build-firefox.yml'
-      - '.github/workflows/flatpak/org.mozilla.firefoxpatch.yml'
-      - '.github/workflows/patches/software-volume.patch'
-      - 'README.md'
   workflow_dispatch:
   schedule:
     - cron: "15 3 * * *"
