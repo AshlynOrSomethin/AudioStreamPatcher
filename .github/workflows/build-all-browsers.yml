@@ -49,9 +49,10 @@ jobs:
       - name: Publish GitHub release (latest)
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: all-browsers-build-${{ github.run_number }}
-          name: All Browsers Build ${{ github.run_number }}
+          tag_name: browsers-latest
+          name: Browsers
           make_latest: true
+          overwrite_files: true
           generate_release_notes: true
           files: |
             release/**/*
