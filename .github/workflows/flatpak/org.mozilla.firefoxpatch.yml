@@ -53,9 +53,33 @@ modules:
         if [ -x /app/firefox/bin/firefox-bin ] && [ ! -e /app/firefox/firefox-bin ]; then
           ln -s bin/firefox-bin /app/firefox/firefox-bin
         fi
-      - install -Dm0755 metadata/launch-script.sh ${FLATPAK_DEST}/bin/launch-script.sh
-      - install -Dm0644 metadata/distribution.ini ${FLATPAK_DEST}/bin/distribution/distribution.ini
-      - install -Dm0644 metadata/icons/org.mozilla.firefox.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/org.mozilla.firefoxpatch.svg
+      - |
+        set -euo pipefail
+        tmpdir="$(mktemp -d)"
+        cat > "$tmpdir/launch-script.sh" <<'EOF'
+        #!/bin/sh
+        set -eu
+        exec /app/firefox/firefox "$@"
+        EOF
+        install -Dm0755 "$tmpdir/launch-script.sh" ${FLATPAK_DEST}/bin/launch-script.sh
+      - |
+        set -euo pipefail
+        tmpdir="$(mktemp -d)"
+        cat > "$tmpdir/distribution.ini" <<'EOF'
+        [Global]
+        id=org.mozilla.firefoxpatch
+        version=1.0
+
+        [Preferences]
+        app.update.enabled=false
+        EOF
+        install -Dm0644 "$tmpdir/distribution.ini" ${FLATPAK_DEST}/bin/distribution/distribution.ini
+      - |
+        set -euo pipefail
+        icon_src="$(find /app/firefox -type f \( -name 'default128.png' -o -name '*128*.png' -o -name '*.png' \) | head -n 1 || true)"
+        if [ -n "${icon_src:-}" ]; then
+          install -Dm0644 "$icon_src" ${FLATPAK_DEST}/share/icons/hicolor/128x128/apps/org.mozilla.firefoxpatch.png
+        fi
       - |
         set -euo pipefail
         tmpdir="$(mktemp -d)"
@@ -93,8 +117,3 @@ modules:
         strip-components: 0
         only-arches:
           - x86_64
-      - type: archive
-        url: https://github.com/flathub/org.mozilla.firefox/raw/master/sources/metadata.tar
-        sha256: e8879404d11a8d2c0535bb0ddf172f0d79d7f5f257dcc8cff603f0f46f778f42
-        strip-components: 0
-        dest: metadata

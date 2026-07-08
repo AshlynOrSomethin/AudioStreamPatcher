@@ -288,11 +288,21 @@ jobs:
           runtime_version=$(awk -F': *' '/^[[:space:]]*runtime-version:[[:space:]]*/ {v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^["'"'"']|["'"'"']$/, "", v); print v; exit}' "$manifest_template")
 
           arch="x86_64"
+          echo "Flatpak manifest runtime=${runtime:-<empty>} sdk=${sdk:-<empty>} runtime-version=${runtime_version:-<empty>} arch=$arch"
+
+          if [ -z "${runtime:-}" ] || [ -z "${sdk:-}" ] || [ -z "${runtime_version:-}" ]; then
+            echo "Manifest is missing runtime/sdk/runtime-version. Cannot preinstall Flatpak deps."
+            exit 1
+          fi
+
           runtime_ref="${runtime}/${arch}/${runtime_version}"
           sdk_ref="${sdk}/${arch}/${runtime_version}"
 
           sudo flatpak install -y --system flathub "$runtime_ref" "$sdk_ref"
           sudo flatpak install -y --system flathub "${runtime}.Locale/${arch}/${runtime_version}" || true
+
+          sudo flatpak info --system "$runtime_ref"
+          sudo flatpak info --system "$sdk_ref"
 
           flatpak_stage="$RUNNER_TEMP/flatpak-src"
           flatpak_src="$RUNNER_TEMP/firefox.linux-x86_64.tar.xz"
@@ -307,6 +317,8 @@ jobs:
             -e "s|__FIREFOX_TAR_PATH__|$flatpak_src|g" \
             -e "s|__FIREFOX_TAR_SHA256__|$flatpak_sha|g" \
             "$manifest_template" > "$patched_manifest"
+
+          echo "Using patched Flatpak manifest with local source: $patched_manifest"
 
           sudo flatpak-builder --state-dir="$FLATPAK_STATE_DIR" --install-deps-from=flathub --repo="$FLATPAK_REPO_DIR" --force-clean "$FLATPAK_BUILD_DIR" "$patched_manifest"
           mkdir -p release
