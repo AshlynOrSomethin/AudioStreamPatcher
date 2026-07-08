@@ -83,8 +83,22 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Resolve Zen upstream release
+        id: upstream
+        run: |
+          set -euo pipefail
+          ZEN_TAG="$(git ls-remote --tags --refs https://github.com/zen-browser/desktop.git | awk -F/ '/refs\/tags\/[0-9]/{print $3}' | grep -E '^[0-9]+(\.[0-9]+)*b$' | sort -V | tail -n 1)"
+          if [ -z "${ZEN_TAG:-}" ]; then
+            echo "Failed to resolve latest Zen release tag"
+            exit 1
+          fi
+
+          echo "source_ref=$ZEN_TAG" >> "$GITHUB_OUTPUT"
+          echo "app_version=$ZEN_TAG" >> "$GITHUB_OUTPUT"
+          echo "artifact_basename=zen-patched-$ZEN_TAG" >> "$GITHUB_OUTPUT"
+
       - name: Clone Zen
-        run: git clone https://github.com/zen-browser/desktop.git --depth 10 zen
+        run: git clone --branch "${{ steps.upstream.outputs.source_ref }}" --depth 1 https://github.com/zen-browser/desktop.git zen
 
       - name: Install deps and build
         run: |
@@ -120,6 +134,8 @@ jobs:
         id: package
         run: |
           set -euo pipefail
+          APP_VERSION="${{ steps.upstream.outputs.app_version }}"
+          ARTIFACT_BASENAME="${{ steps.upstream.outputs.artifact_basename }}"
           dist_dir=$(find zen -maxdepth 4 -type d -path "*/obj-*/dist" | head -n 1)
           if [ -z "$dist_dir" ]; then
             echo "No build dist directory found under zen/obj-*/dist"
@@ -133,26 +149,6 @@ jobs:
           rm -rf "$portable_dir"
           mkdir -p "$portable_dir"
           cp -aL "$dist_dir"/. "$portable_dir"/
-
-          app_ini=""
-          for candidate in "$portable_dir/application.ini" "$portable_dir/bin/application.ini"; do
-            if [ -f "$candidate" ]; then
-              app_ini="$candidate"
-              break
-            fi
-          done
-          if [ -z "$app_ini" ]; then
-            echo "No application.ini found under $portable_dir"
-            exit 1
-          fi
-
-          APP_VERSION="$(awk -F= '/^Version=/{print $2; exit}' "$app_ini" | tr -d '\r')"
-          if [ -z "$APP_VERSION" ]; then
-            echo "No Version entry found in $app_ini"
-            exit 1
-          fi
-
-          ARTIFACT_BASENAME="zen-patched-${APP_VERSION}"
 
           tar czf "${ARTIFACT_BASENAME}.tar.gz" -C "$portable_dir" .
           echo "dist_dir=$portable_dir" >> "$GITHUB_OUTPUT"
