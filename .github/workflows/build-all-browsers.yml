@@ -9,7 +9,8 @@ on:
       - main
   workflow_dispatch:
   schedule:
-    - cron: "0 3 * * *"
+    # GitHub Actions cron is UTC. 10:00 UTC = 5:00 AM US Central during DST.
+    - cron: "0 10 * * 3"
 
 jobs:
   zen:
