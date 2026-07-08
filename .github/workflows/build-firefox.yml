@@ -4,6 +4,13 @@ permissions:
   contents: write
 
 on:
+  workflow_call:
+    inputs:
+      publish_release:
+        description: Publish a GitHub release from this workflow run
+        required: false
+        type: boolean
+        default: true
   push:
     branches:
       - main
@@ -339,7 +346,7 @@ jobs:
           path: "release/*"
 
       - name: Publish GitHub release
-        if: success()
+        if: success() && (github.event_name != 'workflow_call' || inputs.publish_release)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: firefox-build-${{ github.run_number }}

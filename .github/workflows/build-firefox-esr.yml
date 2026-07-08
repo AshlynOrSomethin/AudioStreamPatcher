@@ -1,4 +1,4 @@
-name: Build Zen with patch
+name: Build Firefox ESR with patch
 
 permissions:
   contents: write
@@ -15,34 +15,33 @@ on:
     branches:
       - main
     paths:
-      - '.github/workflows/build.yml'
-      - '.github/workflows/flatpak/app.zen_browser.zenpatch.yml'
+      - '.github/workflows/build-firefox-esr.yml'
+      - '.github/workflows/flatpak/org.mozilla.firefoxesrpatch.yml'
       - '.github/workflows/patches/software-volume.patch'
       - 'README.md'
-  schedule:
-    - cron: "0 3 * * *"
   workflow_dispatch:
+  schedule:
+    - cron: "30 3 * * *"
 
 jobs:
   build:
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v4  # your repo, just contains the patch + scripts
+      - uses: actions/checkout@v4
         with:
           clean: false
 
       - name: Clean previous build outputs
         run: |
           sudo rm -rf \
-            zen \
+            firefox \
             build \
             release \
             pkgroot \
-            appimage-input \
             appimage-root \
             appimagetool-x86_64.AppImage \
             uruntime-appimage-squashfs-lite-x86_64 \
-            zen-patched.tar.gz \
+            firefox-esr-patched.tar.gz \
             .flatpak-builder \
             flatpak-build \
             flatpak-repo
@@ -76,9 +75,15 @@ jobs:
             clang \
             libclang-dev \
             llvm \
-            llvm-dev
+            llvm-dev \
+            python3 \
+            python3-pip \
+            ccache \
+            build-essential \
+            unzip \
+            zip
 
-      - name: Install cbindgen
+      - name: Install rust + cbindgen
         run: |
           if ! command -v rustup >/dev/null 2>&1; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
@@ -95,52 +100,46 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Resolve Zen upstream release
+      - name: Resolve Firefox ESR upstream release
         id: upstream
         run: |
           set -euo pipefail
-          ZEN_TAG="$(git ls-remote --tags --refs https://github.com/zen-browser/desktop.git | awk -F/ '/refs\/tags\/[0-9]/{print $3}' | grep -E '^[0-9]+(\.[0-9]+)*b$' | sort -V | tail -n 1)"
-          if [ -z "${ZEN_TAG:-}" ]; then
-            echo "Failed to resolve latest Zen release tag"
-            exit 1
-          fi
+          FIREFOX_VERSION="$(curl -fsSL https://product-details.mozilla.org/1.0/firefox_versions.json | python3 -c 'import json,sys; print(json.load(sys.stdin)["FIREFOX_ESR"])')"
+          FIREFOX_SOURCE_URL="https://archive.mozilla.org/pub/firefox/releases/${FIREFOX_VERSION}/source/firefox-${FIREFOX_VERSION}.source.tar.xz"
+          curl -fsI "$FIREFOX_SOURCE_URL" >/dev/null
 
-          echo "source_ref=$ZEN_TAG" >> "$GITHUB_OUTPUT"
-          echo "app_version=$ZEN_TAG" >> "$GITHUB_OUTPUT"
-          echo "artifact_basename=zen-patched-$ZEN_TAG" >> "$GITHUB_OUTPUT"
+          echo "app_version=$FIREFOX_VERSION" >> "$GITHUB_OUTPUT"
+          echo "artifact_basename=firefox-esr-patched-$FIREFOX_VERSION" >> "$GITHUB_OUTPUT"
+          echo "source_url=$FIREFOX_SOURCE_URL" >> "$GITHUB_OUTPUT"
 
-      - name: Clone Zen
-        run: git clone --branch "${{ steps.upstream.outputs.source_ref }}" --depth 1 https://github.com/zen-browser/desktop.git zen
-
-      - name: Install deps and build
+      - name: Fetch Firefox source
         run: |
-          cd zen
-          npm i
-          npm run init
+          set -euo pipefail
+          curl -fsSL "${{ steps.upstream.outputs.source_url }}" -o firefox-source.tar.xz
+          mkdir -p firefox
+          tar -xJf firefox-source.tar.xz -C firefox --strip-components=1
 
       - name: Apply patch
         run: |
-          cd zen/engine
-          patch -p1 < ../../.github/workflows/patches/software-volume.patch
+          cd firefox
+          patch -p1 < ../.github/workflows/patches/software-volume.patch
 
-      - name: Update en-US packs
+      - name: Configure mozconfig for CI
         run: |
-          cd zen
-          python3 ./scripts/update_en_US_packs.py
-
-      - name: Adjust mozconfig for CI
-        run: |
-          cd zen
-          for cfg in configs/common/mozconfig configs/linux/mozconfig; do
-            if [ -f "$cfg" ] && ! grep -q -- "--without-wasm-sandboxed-libraries" "$cfg"; then
-              echo "ac_add_options --without-wasm-sandboxed-libraries" >> "$cfg"
-            fi
-          done
+          cd firefox
+          cat > .mozconfig <<'EOF'
+          ac_add_options --enable-application=browser
+          ac_add_options --disable-debug
+          ac_add_options --enable-optimize
+          ac_add_options --disable-tests
+          ac_add_options --without-wasm-sandboxed-libraries
+          mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-firefox
+          EOF
 
       - name: Build
         run: |
-          cd zen
-          npm run build
+          cd firefox
+          ./mach build
 
       - name: Package artifact
         id: package
@@ -148,16 +147,13 @@ jobs:
           set -euo pipefail
           APP_VERSION="${{ steps.upstream.outputs.app_version }}"
           ARTIFACT_BASENAME="${{ steps.upstream.outputs.artifact_basename }}"
-          dist_dir=$(find zen -maxdepth 4 -type d -path "*/obj-*/dist" | head -n 1)
+          dist_dir=$(find firefox -maxdepth 4 -type d -path "*/obj-*/dist" | head -n 1)
           if [ -z "$dist_dir" ]; then
-            echo "No build dist directory found under zen/obj-*/dist"
+            echo "No build dist directory found under firefox/obj-*/dist"
             exit 1
           fi
 
-          # Create a portable staging directory with symlinks resolved.
-          # Some files in dist/bin (for example dependentlibs.list) are build-tree symlinks.
-          # If we archive raw dist, those links break after extraction and XPCOM fails to load.
-          portable_dir="$RUNNER_TEMP/zen-dist-portable"
+          portable_dir="$RUNNER_TEMP/firefox-dist-portable"
           rm -rf "$portable_dir"
           mkdir -p "$portable_dir"
           cp -aL "$dist_dir"/. "$portable_dir"/
@@ -181,16 +177,16 @@ jobs:
           sudo gem install --no-document fpm
 
           rm -rf pkgroot
-          mkdir -p pkgroot/usr/lib/zen-patched pkgroot/usr/bin
-          cp -a "$DIST_DIR"/. pkgroot/usr/lib/zen-patched/
-          ln -s ../lib/zen-patched/bin/zen pkgroot/usr/bin/zen
-          if [ -e pkgroot/usr/lib/zen-patched/bin/zen-bin ]; then
-            ln -s ../lib/zen-patched/bin/zen-bin pkgroot/usr/bin/zen-bin
+          mkdir -p pkgroot/usr/lib/firefox-esr-patched pkgroot/usr/bin
+          cp -a "$DIST_DIR"/. pkgroot/usr/lib/firefox-esr-patched/
+          ln -s ../lib/firefox-esr-patched/bin/firefox pkgroot/usr/bin/firefox
+          if [ -e pkgroot/usr/lib/firefox-esr-patched/bin/firefox-bin ]; then
+            ln -s ../lib/firefox-esr-patched/bin/firefox-bin pkgroot/usr/bin/firefox-bin
           fi
 
-          fpm -s dir -t deb -n zen-patched -v "$VERSION" -C pkgroot -p "release/${ARTIFACT_BASENAME}-amd64.deb" usr
-          fpm -s dir -t rpm -n zen-patched -v "$VERSION" -C pkgroot -p "release/${ARTIFACT_BASENAME}-x86_64.rpm" usr
-          fpm -s dir -t pacman -n zen-patched -v "$VERSION" -C pkgroot -p "release/${ARTIFACT_BASENAME}-x86_64.pkg.tar.zst" usr
+          fpm -s dir -t deb -n firefox-esr-patched -v "$VERSION" -C pkgroot -p "release/${ARTIFACT_BASENAME}-amd64.deb" usr
+          fpm -s dir -t rpm -n firefox-esr-patched -v "$VERSION" -C pkgroot -p "release/${ARTIFACT_BASENAME}-x86_64.rpm" usr
+          fpm -s dir -t pacman -n firefox-esr-patched -v "$VERSION" -C pkgroot -p "release/${ARTIFACT_BASENAME}-x86_64.pkg.tar.zst" usr
 
       - name: Build AppImage (best effort)
         continue-on-error: true
@@ -203,62 +199,40 @@ jobs:
           APPIMAGE_NAME="${ARTIFACT_BASENAME}-${ARCH}.AppImage"
           APPIMAGE_ZSYNC_NAME="${APPIMAGE_NAME}.zsync"
 
-          if [ ! -d "${DIST_DIR:-}" ]; then
-            echo "Missing DIST_DIR from build output. Skipping AppImage build."
-            exit 0
-          fi
-
           sudo apt-get update
           sudo apt-get install -y desktop-file-utils appstream file
           if ! sudo apt-get install -y libfuse2; then
             sudo apt-get install -y libfuse2t64
           fi
 
-          rm -rf "$APPDIR" appimage-root
-          mkdir -p "$APPDIR" appimage-root release
+          rm -rf "$APPDIR"
+          mkdir -p "$APPDIR" release
           cp -a "$DIST_DIR"/. "$APPDIR"/
 
           DESKTOP_FILE="$(find "$APPDIR" -maxdepth 3 -type f -name "*.desktop" | head -n 1 || true)"
           if [ -z "${DESKTOP_FILE:-}" ]; then
             mkdir -p "$APPDIR/usr/share/applications"
-            DESKTOP_FILE="$APPDIR/usr/share/applications/zen-patched.desktop"
+            DESKTOP_FILE="$APPDIR/usr/share/applications/firefox-esr-patched.desktop"
             printf '%s\n' \
               '[Desktop Entry]' \
               'Type=Application' \
-              'Name=Zen Patched' \
-              'Exec=zen' \
-              'Icon=zen' \
+              'Name=Firefox ESR Patched' \
+              'Exec=firefox' \
+              'Icon=firefox' \
               'Categories=Network;WebBrowser;' \
               > "$DESKTOP_FILE"
           fi
 
-          app_exec_raw=$(awk -F= '/^Exec=/{print $2; exit}' "$DESKTOP_FILE" | sed -E 's/[[:space:]]+%[A-Za-z]//g' | awk '{print $1}' || true)
           app_exec=""
-
-          if [ -n "${app_exec_raw:-}" ]; then
-            for probe in "$app_exec_raw" "$(basename "$app_exec_raw")" "bin/$app_exec_raw" "bin/$(basename "$app_exec_raw")"; do
-              if [ -x "$APPDIR/$probe" ]; then
-                app_exec="$probe"
-                break
-              fi
-            done
-          fi
-
-          if [ -z "${app_exec:-}" ]; then
-            for candidate in zen zen-bin firefox firefox-bin browser bin/zen bin/zen-bin bin/firefox bin/firefox-bin; do
-              if [ -x "$APPDIR/$candidate" ]; then
-                app_exec="$candidate"
-                break
-              fi
-            done
-          fi
+          for candidate in firefox firefox-bin bin/firefox bin/firefox-bin; do
+            if [ -x "$APPDIR/$candidate" ]; then
+              app_exec="$candidate"
+              break
+            fi
+          done
 
           if [ -z "${app_exec:-}" ]; then
             app_exec=$(find "$APPDIR/bin" -maxdepth 1 -type f -executable 2>/dev/null | head -n 1 | sed "s|$APPDIR/||" || true)
-          fi
-
-          if [ -z "${app_exec:-}" ]; then
-            app_exec=$(find "$APPDIR" -maxdepth 1 -type f -executable | head -n 1 | sed "s|$APPDIR/||" || true)
           fi
 
           if [ -z "${app_exec:-}" ]; then
@@ -270,13 +244,13 @@ jobs:
           mkdir -p "$APPDIR/usr/share/icons/hicolor/128x128/apps"
           icon_path=$(find "$APPDIR" -type f \( -name "*128*.png" -o -name "*256*.png" -o -name "*.png" \) | head -n 1 || true)
           if [ -n "${icon_path:-}" ]; then
-            cp "$icon_path" "$APPDIR/usr/share/icons/hicolor/128x128/apps/zen.png"
-            cp "$icon_path" "$APPDIR/zen.png"
-            ln -sf zen.png "$APPDIR/.DirIcon"
+            cp "$icon_path" "$APPDIR/usr/share/icons/hicolor/128x128/apps/firefox.png"
+            cp "$icon_path" "$APPDIR/firefox.png"
+            ln -sf firefox.png "$APPDIR/.DirIcon"
           fi
 
-          cp "$DESKTOP_FILE" "$APPDIR/zen.desktop"
-          sed -i -E 's/^Exec=.*/Exec=zen-patched/; s/^Icon=.*/Icon=zen/' "$APPDIR/zen.desktop"
+          cp "$DESKTOP_FILE" "$APPDIR/firefox.desktop"
+          sed -i -E 's/^Exec=.*/Exec=firefox-esr-patched/; s/^Icon=.*/Icon=firefox/' "$APPDIR/firefox.desktop"
 
           printf '#!/bin/sh\nexec "$APPDIR/%s" "$@"\n' "$app_exec" > "$APPDIR/AppRun"
           chmod +x "$APPDIR/AppRun"
@@ -311,7 +285,7 @@ jobs:
           sudo rm -rf "$FLATPAK_BUILD_DIR" "$FLATPAK_REPO_DIR" "$FLATPAK_STATE_DIR"
           mkdir -p "$FLATPAK_BUILD_DIR" "$FLATPAK_REPO_DIR" "$FLATPAK_STATE_DIR"
 
-          manifest_template=".github/workflows/flatpak/app.zen_browser.zenpatch.yml"
+          manifest_template=".github/workflows/flatpak/org.mozilla.firefoxesrpatch.yml"
           if [ ! -f "$manifest_template" ]; then
             echo "Missing Flatpak manifest template: $manifest_template"
             exit 1
@@ -346,38 +320,38 @@ jobs:
           sudo flatpak info --system "$sdk_ref"
 
           flatpak_stage="$RUNNER_TEMP/flatpak-src"
-          flatpak_src="$RUNNER_TEMP/zen.linux-x86_64.tar.xz"
+          flatpak_src="$RUNNER_TEMP/firefox-esr.linux-x86_64.tar.xz"
           rm -rf "$flatpak_stage"
-          mkdir -p "$flatpak_stage/zen"
-          cp -a "$DIST_DIR"/. "$flatpak_stage/zen"/
-          tar -cJf "$flatpak_src" -C "$flatpak_stage" zen
+          mkdir -p "$flatpak_stage/firefox"
+          cp -a "$DIST_DIR"/. "$flatpak_stage/firefox"/
+          tar -cJf "$flatpak_src" -C "$flatpak_stage" firefox
           flatpak_sha=$(sha256sum "$flatpak_src" | awk '{print $1}')
 
-          patched_manifest="$RUNNER_TEMP/zen-flatpak.patched.yml"
+          patched_manifest="$RUNNER_TEMP/firefox-esr-flatpak.patched.yml"
           sed \
-            -e "s|__ZEN_TAR_PATH__|$flatpak_src|g" \
-            -e "s|__ZEN_TAR_SHA256__|$flatpak_sha|g" \
+            -e "s|__FIREFOX_TAR_PATH__|$flatpak_src|g" \
+            -e "s|__FIREFOX_TAR_SHA256__|$flatpak_sha|g" \
             "$manifest_template" > "$patched_manifest"
 
           echo "Using patched Flatpak manifest with local source: $patched_manifest"
 
           sudo flatpak-builder --state-dir="$FLATPAK_STATE_DIR" --install-deps-from=flathub --repo="$FLATPAK_REPO_DIR" --force-clean "$FLATPAK_BUILD_DIR" "$patched_manifest"
           mkdir -p release
-          sudo flatpak build-bundle "$FLATPAK_REPO_DIR" "release/${ARTIFACT_BASENAME}.flatpak" app.zen_browser.zenpatch
+          sudo flatpak build-bundle "$FLATPAK_REPO_DIR" "release/${ARTIFACT_BASENAME}.flatpak" org.mozilla.firefoxesrpatch
           sudo chown -R "$(id -u):$(id -g)" release || true
 
       - uses: actions/upload-artifact@v4
         with:
-          name: zen-patched-${{ steps.package.outputs.app_version }}
+          name: firefox-esr-patched-${{ steps.package.outputs.app_version }}
           path: "release/*"
 
       - name: Publish GitHub release
         if: success() && (github.event_name != 'workflow_call' || inputs.publish_release)
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_number }}
-          name: Build ${{ github.run_number }}
-          make_latest: true
+          tag_name: firefox-esr-build-${{ github.run_number }}
+          name: Firefox ESR Build ${{ github.run_number }}
+          make_latest: false
           generate_release_notes: true
           files: |
             release/*
