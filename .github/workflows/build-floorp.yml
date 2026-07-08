@@ -288,6 +288,7 @@ jobs:
           DIST_ROOT="$GITHUB_WORKSPACE/runtime/obj-artifact-build-output/dist"
           PATCH_TARGET="$DIST_ROOT/bin"
           BUILDID2_SRC="$GITHUB_WORKSPACE/noraneko/_dist/buildid2"
+          INJECTOR_DIST_BRIDGE="$GITHUB_WORKSPACE/obj-artifact-build-output"
 
           copy_buildid2() {
             local dest_root="$1"
@@ -297,6 +298,13 @@ jobs:
             mkdir -p "$dest_root/browser"
             cp "$BUILDID2_SRC" "$dest_root/browser/buildid2"
           }
+
+          # Floorp injector expects dist under $GITHUB_WORKSPACE/obj-artifact-build-output.
+          # Our runtime build writes to runtime/obj-artifact-build-output, so bridge it.
+          if [ -L "$INJECTOR_DIST_BRIDGE" ]; then
+            rm -f "$INJECTOR_DIST_BRIDGE"
+          fi
+          ln -s "$GITHUB_WORKSPACE/runtime/obj-artifact-build-output" "$INJECTOR_DIST_BRIDGE"
 
           cd "$GITHUB_WORKSPACE/noraneko"
           deno task feles-build build --phase after-mach
