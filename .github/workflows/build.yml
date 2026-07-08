@@ -7,6 +7,11 @@ on:
   push:
     branches:
       - main
+    paths:
+      - '.github/workflows/build.yml'
+      - '.github/workflows/flatpak/app.zen_browser.zenpatch.yml'
+      - '.github/workflows/patches/software-volume.patch'
+      - 'README.md'
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch:
